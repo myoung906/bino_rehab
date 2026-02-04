@@ -226,7 +226,19 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
     <div className="relative w-full h-full rounded-2xl overflow-hidden glass-panel shadow-2xl border border-slate-700 flex items-center justify-center bg-black">
       {!isReady && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900 z-10 gap-4">
-          {errorMsg ? (
+          {devices.length === 0 ? (
+            <>
+              <div className="text-yellow-500 font-bold text-xl">No Camera Found</div>
+              <div className="text-slate-400 text-sm px-4 text-center max-w-sm">
+                Please check your Mac System Settings:
+                <br />
+                1. Privacy & Security &gt; Camera
+                <br />
+                2. Screen Time &gt; Content & Privacy
+              </div>
+              <button onClick={() => window.location.reload()} className="mt-4 px-4 py-2 bg-slate-800 text-white rounded hover:bg-slate-700 transition">Retry</button>
+            </>
+          ) : errorMsg ? (
             <>
               <div className="text-red-500 font-bold">Error Loading AI</div>
               <div className="text-red-400 text-xs px-4 text-center max-w-sm">{errorMsg}</div>
