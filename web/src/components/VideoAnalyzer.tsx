@@ -51,15 +51,37 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
 
         if (ignore) return;
 
-        const landmarker = await FaceLandmarker.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
-            delegate: "GPU"
-          },
-          outputFaceBlendshapes: true,
-          runningMode: "VIDEO",
-          numFaces: 1
-        });
+        let landmarker: FaceLandmarker;
+        try {
+          console.log("Attempting to load MediaPipe with GPU delegate...");
+          landmarker = await FaceLandmarker.createFromOptions(vision, {
+            baseOptions: {
+              modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
+              delegate: "GPU"
+            },
+            outputFaceBlendshapes: true,
+            runningMode: "VIDEO",
+            numFaces: 1
+          });
+          console.log("FaceLandmarker loaded with GPU");
+        } catch (gpuError) {
+          console.warn("GPU initialization failed, falling back to CPU:", gpuError);
+          if (ignore) return;
+
+          setErrorMsg("GPU failed, switching to CPU mode...");
+
+          // Fallback to CPU
+          landmarker = await FaceLandmarker.createFromOptions(vision, {
+            baseOptions: {
+              modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
+              delegate: "CPU"
+            },
+            outputFaceBlendshapes: true,
+            runningMode: "VIDEO",
+            numFaces: 1
+          });
+          console.log("FaceLandmarker loaded with CPU fallback");
+        }
 
         if (ignore) {
           landmarker.close();
@@ -67,12 +89,12 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
         }
 
         faceLandmarkerRef.current = landmarker;
-        console.log("FaceLandmarker loaded");
         setIsReady(true);
+        setErrorMsg(null); // Clear any temp error messages
       } catch (error: any) {
         if (!ignore) {
           console.error("Failed to load MediaPipe:", error);
-          setErrorMsg(error.message || "Failed to load AI Model. Check connection/GPU.");
+          setErrorMsg(error.message || "Failed to load AI Model. Please check your connection.");
         }
       }
     };
