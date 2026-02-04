@@ -1,0 +1,88 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+:root {
+  --background: #0f172a; /* Slate 900 */
+  --foreground: #e2e8f0; /* Slate 200 */
+
+  /* Primary Brand Colors - Medical Teal/Cyan */
+  --primary: #06b6d4; /* Cyan 500 */
+  --primary-foreground: #0f172a;
+  
+  /* Secondary - Purple/Indigo for data visualization */
+  --secondary: #8b5cf6; /* Violet 500 */
+  --secondary-foreground: #ffffff;
+
+  /* Surface Colors for Glassmorphism */
+  --card: rgba(30, 41, 59, 0.7); /* Slate 800 with opacity */
+  --card-foreground: #f8fafc;
+  --popover: rgba(15, 23, 42, 0.9);
+  --popover-foreground: #f8fafc;
+
+  /* Status Colors */
+  --success: #10b981;
+  --warning: #f59e0b;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+
+  /* Animation Speeds */
+  --transition-fast: 0.2s ease;
+  --transition-normal: 0.3s ease-out;
+}
+
+/* @media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+} */
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), system-ui, sans-serif;
+  antialiased: true;
+  background-image: 
+    radial-gradient(circle at 50% 0%, #1e293b 0%, transparent 50%),
+    radial-gradient(circle at 100% 0%, #0f172a 0%, transparent 30%);
+}
+
+/* Glassmorphism Utilities */
+.glass-panel {
+  background: var(--card);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+.glass-button {
+  background: rgba(6, 182, 212, 0.1);
+  border: 1px solid rgba(6, 182, 212, 0.2);
+  color: var(--primary);
+  transition: all var(--transition-fast);
+}
+
+.glass-button:hover {
+  background: rgba(6, 182, 212, 0.2);
+  box-shadow: 0 0 15px rgba(6, 182, 212, 0.3);
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
