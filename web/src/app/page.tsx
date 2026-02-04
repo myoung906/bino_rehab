@@ -41,21 +41,23 @@ export default function Home() {
         </div>
 
         {/* Left Column: Real-time */}
-        <div className="flex flex-col gap-2 min-h-0">
+        <div className="flex flex-col gap-2 overflow-y-auto min-h-0 pr-1">
           <div className="glass-panel p-3 rounded-xl">
             <h2 className="text-xs font-semibold mb-2 text-slate-300 uppercase tracking-wider">Real-time</h2>
             <div className="bg-slate-800/50 p-2 rounded-lg border border-slate-700 mb-2">
               <p className="text-slate-500 text-[10px]">Velocity</p>
               <p className="text-xl font-mono text-cyan-400">{velocity.toFixed(2)} <span className="text-xs text-slate-500">mm/s</span></p>
             </div>
-            <div className="bg-slate-800/50 p-2 rounded-lg border border-slate-700 h-28 mb-2">
+            <div className="bg-slate-800/50 p-2 rounded-lg border border-slate-700 mb-2">
               <p className="text-slate-500 text-[10px] mb-1">Convergence</p>
-              <ResponsiveContainer width="100%" height="85%">
-                <LineChart data={history}>
-                  <YAxis hide domain={['auto', 'auto']} />
-                  <Line type="monotone" dataKey="v" stroke="#06b6d4" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-                </LineChart>
-              </ResponsiveContainer>
+              <div className="h-24">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={history}>
+                    <YAxis hide domain={['auto', 'auto']} />
+                    <Line type="monotone" dataKey="v" stroke="#06b6d4" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
             </div>
             <div className="flex justify-between items-center bg-slate-800/50 px-2 py-1.5 rounded-lg border border-slate-700">
               <span className="text-slate-500 text-[10px]">Symmetry</span>
@@ -65,7 +67,7 @@ export default function Home() {
         </div>
 
         {/* Right Column: Clinical Results */}
-        <div className="flex flex-col gap-2 overflow-y-auto min-h-0">
+        <div className="flex flex-col gap-2 overflow-y-auto min-h-0 pr-1">
           <div className="glass-panel p-3 rounded-xl">
             <h2 className="text-xs font-semibold mb-2 text-slate-300 uppercase tracking-wider">
               원거리 <span className="text-slate-500 font-normal">Distance</span>
