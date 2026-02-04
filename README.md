@@ -1,3 +1,8 @@
+# 🚀 바로 테스트하기 (Live Demo)
+👉 [https://myoung906.github.io/bino_rehab](https://myoung906.github.io/bino_rehab)
+
+---
+
 # AGENTS.md - AI 에이전트 작업 지침서
 
 이 파일은 '양안시 기능 및 동적 대칭성 분석 솔루션' 프로젝트에 참여하는 AI 에이전트 및 개발자를 위한 핵심 지침을 담고 있습니다.
