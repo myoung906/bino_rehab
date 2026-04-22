@@ -64,31 +64,19 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
         );
         if (ignore) return;
 
-        let landmarker: FaceLandmarker;
-        try {
-          // GPU delegate 우선 시도
-          landmarker = await FaceLandmarker.createFromOptions(vision, {
-            baseOptions: {
-              modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
-              delegate: "GPU"
-            },
-            outputFaceBlendshapes: true,
-            runningMode: "VIDEO",
-            numFaces: 1
-          });
-        } catch {
-          // GPU 실패 시 CPU fallback
-          if (ignore) return;
-          landmarker = await FaceLandmarker.createFromOptions(vision, {
-            baseOptions: {
-              modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
-              delegate: "CPU"
-            },
-            outputFaceBlendshapes: true,
-            runningMode: "VIDEO",
-            numFaces: 1
-          });
-        }
+        // CPU delegate 사용 — macOS WebGL GPU delegate는 face detector ROI를
+        // 잘못 계산하는 known issue가 있어 안정적인 CPU 사용
+        const landmarker = await FaceLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
+            delegate: "CPU"
+          },
+          outputFaceBlendshapes: false,
+          runningMode: "VIDEO",
+          numFaces: 1,
+          minFaceDetectionConfidence: 0.3,
+          minTrackingConfidence: 0.3,
+        });
 
         if (ignore) { landmarker.close(); return; }
         faceLandmarkerRef.current = landmarker;
@@ -176,8 +164,8 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
       const vw = video.videoWidth;
       const vh = video.videoHeight;
 
-      // 디버그 정보는 개발 환경에서만 30프레임마다 업데이트
-      if (process.env.NODE_ENV === 'development' && frameCountRef.current % 30 === 0) {
+      // 30프레임마다 디버그 정보 갱신 (항상 표시)
+      if (frameCountRef.current % 30 === 0) {
         setDebugInfo(
           `ready:${readyState} model:${hasModel} video:${vw}x${vh} frames:${frameCountRef.current} detects:${detectCountRef.current} faces:${faceCountRef.current}`
         );
@@ -200,7 +188,13 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
           // 프레임 카운터 (900으로 순환 — 30fps 기준 30초 주기)
           frameCountRef.current = (frameCountRef.current + 1) % 900;
 
-          if (hasModel) {
+          // 새 비디오 프레임에서만 감지 — 같은 프레임 중복 호출 시 MediaPipe ROI 상태 교란 방지
+          const isNewFrame = video.currentTime !== lastVideoTimeRef.current;
+          if (isNewFrame) {
+            lastVideoTimeRef.current = video.currentTime;
+          }
+
+          if (hasModel && isNewFrame) {
             try {
               const results = faceLandmarkerRef.current!.detectForVideo(video, performance.now());
               detectCountRef.current++;
@@ -334,12 +328,10 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
       />
       {/* Canvas: 미러링된 비디오 프레임 + 오버레이 */}
       <canvas ref={canvasRef} style={{ position: 'absolute', zIndex: 1, width: '100%', height: '100%', objectFit: 'contain' }} />
-      {/* 디버그 정보 바 — 개발 환경에서만 표시 */}
-      {process.env.NODE_ENV === 'development' && (
-        <div className="absolute top-2 left-2 right-2 z-30 text-sm font-mono text-yellow-400 bg-black/80 px-3 py-2 rounded">
-          {debugInfo}
-        </div>
-      )}
+      {/* 디버그 정보 바 — 항상 표시 */}
+      <div className="absolute top-2 left-2 right-2 z-30 text-xs font-mono text-yellow-400 bg-black/80 px-3 py-2 rounded">
+        {debugInfo}
+      </div>
       {/* 얼굴 미감지 안내 오버레이 */}
       {isReady && cameraReady && !faceDetected && !errorMsg && (
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 text-center pointer-events-none">
