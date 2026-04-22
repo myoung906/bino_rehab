@@ -13,7 +13,9 @@ const VELOCITY_THRESHOLD_MM = 1.0;
 const PIXEL_TO_MM = 0.45;
 
 export const useBinocularLogic = () => {
-    const { updateFrame, isRecording, setClinical } = useAnalysisStore();
+    const updateFrame = useAnalysisStore((s) => s.updateFrame);
+    const isRecording = useAnalysisStore((s) => s.isRecording);
+    const setClinical = useAnalysisStore((s) => s.setClinical);
 
     // isRecording을 ref로 관리 — processFrame의 의존성 배열에서 제거하여 콜백 identity 안정화
     // (isRecording이 deps에 있으면 녹화 토글 시 processFrame → runLoop 재생성됨)

@@ -48,9 +48,11 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
   const streamRef = useRef<MediaStream | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [debugInfo, setDebugInfo] = useState('waiting...');
+  const [faceDetected, setFaceDetected] = useState(false);
   const frameCountRef = useRef(0);
   const detectCountRef = useRef(0);
   const faceCountRef = useRef(0);
+  const lastFaceDetectedRef = useRef(false);
 
   // MediaPipe 초기화
   useEffect(() => {
@@ -203,7 +205,13 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
               const results = faceLandmarkerRef.current!.detectForVideo(video, performance.now());
               detectCountRef.current++;
 
-              if (results.faceLandmarks && results.faceLandmarks.length > 0) {
+              const nowDetected = results.faceLandmarks && results.faceLandmarks.length > 0;
+              if (nowDetected !== lastFaceDetectedRef.current) {
+                lastFaceDetectedRef.current = nowDetected;
+                setFaceDetected(nowDetected);
+              }
+
+              if (nowDetected) {
                 faceCountRef.current++;
                 const landmarks = results.faceLandmarks[0];
 
@@ -310,7 +318,7 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
             <>
               <RefreshCw className="w-10 h-10 text-cyan-500 animate-spin" />
               <p className="text-cyan-400 font-mono text-sm">
-                {!cameraReady ? "Connecting Camera..." : "Loading AI Models... (GPU)"}
+                {!cameraReady ? "Connecting Camera..." : "Loading AI Models..."}
               </p>
             </>
           )}
@@ -332,6 +340,14 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
           {debugInfo}
         </div>
       )}
+      {/* 얼굴 미감지 안내 오버레이 */}
+      {isReady && cameraReady && !faceDetected && !errorMsg && (
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 text-center pointer-events-none">
+          <div className="text-slate-400 text-sm font-mono bg-black/50 px-3 py-2 rounded-lg">
+            얼굴을 카메라 정면에 위치시켜 주세요
+          </div>
+        </div>
+      )}
       <div className="absolute bottom-4 left-4 right-4 flex justify-between items-center glass-panel p-3 rounded-xl z-20">
         <div className="flex items-center gap-2">
           <Camera className="w-5 h-5 text-cyan-400" />
@@ -342,6 +358,11 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
         <div className="flex gap-2 items-center">
           <div className={clsx("w-3 h-3 rounded-full transition-colors", isReady && cameraReady ? "bg-green-500 animate-pulse" : "bg-yellow-500")} title="System Status"></div>
           <span className="text-xs text-slate-400">{isReady && cameraReady ? "Ready" : "Initializing"}</span>
+          {isReady && cameraReady && (
+            <span className="text-xs font-mono text-slate-500">
+              {faceDetected ? '👁 감지됨' : '— 대기중'}
+            </span>
+          )}
         </div>
       </div>
     </div>
