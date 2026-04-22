@@ -1,5 +1,6 @@
 'use client';
 
+import React, { memo } from 'react';
 import VideoAnalyzer from "@/components/VideoAnalyzer";
 import { useBinocularLogic } from "@/hooks/useBinocularLogic";
 import { useAnalysisStore } from "@/hooks/useAnalysisStore";
@@ -16,9 +17,95 @@ const MetricRow = ({ label, value, unit, color = "text-cyan-400" }: {
   </div>
 );
 
+// history만 구독 — velocity/symmetry 변경 시 리렌더 없음 (~10fps로만 갱신)
+const VelocityChart = memo(() => {
+  const history = useAnalysisStore((s) => s.history);
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <LineChart data={history}>
+        <YAxis hide domain={['auto', 'auto']} />
+        <Line type="monotone" dataKey="v" stroke="#06b6d4" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+      </LineChart>
+    </ResponsiveContainer>
+  );
+});
+VelocityChart.displayName = 'VelocityChart';
+
+// velocity, symmetry만 구독 — clinical/history 변경 시 리렌더 없음
+const RealtimeMetrics = memo(() => {
+  const velocity = useAnalysisStore((s) => s.velocity);
+  const symmetry = useAnalysisStore((s) => s.symmetry);
+  return (
+    <div className="glass-panel p-3 rounded-xl">
+      <h2 className="text-xs font-semibold mb-2 text-slate-300 uppercase tracking-wider">Real-time</h2>
+      <div className="bg-slate-800/50 p-2 rounded-lg border border-slate-700 mb-2">
+        <p className="text-slate-500 text-[10px]">Velocity</p>
+        <p className="text-xl font-mono text-cyan-400">{velocity.toFixed(2)} <span className="text-xs text-slate-500">mm/s</span></p>
+      </div>
+      <div className="bg-slate-800/50 p-2 rounded-lg border border-slate-700 mb-2">
+        <p className="text-slate-500 text-[10px] mb-1">Convergence</p>
+        <div className="h-24">
+          <VelocityChart />
+        </div>
+      </div>
+      <div className="flex justify-between items-center bg-slate-800/50 px-2 py-1.5 rounded-lg border border-slate-700">
+        <span className="text-slate-500 text-[10px]">Symmetry</span>
+        <span className="font-mono text-sm text-purple-400">{symmetry}%</span>
+      </div>
+    </div>
+  );
+});
+RealtimeMetrics.displayName = 'RealtimeMetrics';
+
+// clinical만 구독 — 녹화 종료 시에만 리렌더 (매 프레임 불필요)
+const ClinicalPanel = memo(() => {
+  const clinical = useAnalysisStore((s) => s.clinical);
+  return (
+    <div className="flex flex-col gap-2 overflow-y-auto min-h-0 pr-1">
+      <div className="glass-panel p-3 rounded-xl">
+        <h2 className="text-xs font-semibold mb-2 text-slate-300 uppercase tracking-wider">
+          원거리 <span className="text-slate-500 font-normal">Distance</span>
+        </h2>
+        <div className="divide-y divide-slate-700/50">
+          <MetricRow label="사위 Phoria" value={clinical.distPhoria} unit="Δ" />
+          <MetricRow label="양성상대폭주 PRC" value={clinical.distPRC} color="text-green-400" />
+          <MetricRow label="음성상대폭주 NRC" value={clinical.distNRC} color="text-red-400" />
+        </div>
+      </div>
+
+      <div className="glass-panel p-3 rounded-xl">
+        <h2 className="text-xs font-semibold mb-2 text-slate-300 uppercase tracking-wider">
+          근거리 <span className="text-slate-500 font-normal">Near</span>
+        </h2>
+        <div className="divide-y divide-slate-700/50">
+          <MetricRow label="사위 Phoria" value={clinical.nearPhoria} unit="Δ" />
+          <MetricRow label="양성상대폭주 PRC" value={clinical.nearPRC} color="text-green-400" />
+          <MetricRow label="음성상대폭주 NRC" value={clinical.nearNRC} color="text-red-400" />
+          <MetricRow label="양성상대조절 PRA" value={clinical.nearPRA} unit="D" color="text-green-400" />
+          <MetricRow label="음성상대조절 NRA" value={clinical.nearNRA} unit="D" color="text-red-400" />
+        </div>
+      </div>
+
+      <div className="glass-panel p-3 rounded-xl">
+        <h2 className="text-xs font-semibold mb-2 text-slate-300 uppercase tracking-wider">
+          추가측정 <span className="text-slate-500 font-normal">Additional</span>
+        </h2>
+        <div className="divide-y divide-slate-700/50">
+          <MetricRow label="AC/A Ratio" value={clinical.acA} color="text-amber-400" />
+          <MetricRow label="NPC" value={clinical.npc} unit="cm" color="text-amber-400" />
+          <MetricRow label="최대조절력" value={clinical.maxAccom} unit="D" color="text-amber-400" />
+        </div>
+      </div>
+    </div>
+  );
+});
+ClinicalPanel.displayName = 'ClinicalPanel';
+
 export default function Home() {
   const { processFrame } = useBinocularLogic();
-  const { velocity, symmetry, isRecording, toggleRecording, history, clinical } = useAnalysisStore();
+  // isRecording, toggleRecording만 구독 — 프레임 업데이트 시 Home 리렌더 없음
+  const isRecording = useAnalysisStore((s) => s.isRecording);
+  const toggleRecording = useAnalysisStore((s) => s.toggleRecording);
 
   return (
     <div className="grid grid-rows-[auto_1fr] h-screen p-3 gap-3 font-[family-name:var(--font-geist-sans)] overflow-hidden">
@@ -35,74 +122,18 @@ export default function Home() {
       </header>
 
       <main className="grid grid-cols-[1fr_240px_240px] gap-3 min-h-0">
-        {/* Video Area */}
+        {/* 비디오 영역 */}
         <div className="min-h-0">
           <VideoAnalyzer onFrame={processFrame} />
         </div>
 
-        {/* Left Column: Real-time */}
+        {/* 실시간 메트릭 패널 — velocity/symmetry 구독 */}
         <div className="flex flex-col gap-2 overflow-y-auto min-h-0 pr-1">
-          <div className="glass-panel p-3 rounded-xl">
-            <h2 className="text-xs font-semibold mb-2 text-slate-300 uppercase tracking-wider">Real-time</h2>
-            <div className="bg-slate-800/50 p-2 rounded-lg border border-slate-700 mb-2">
-              <p className="text-slate-500 text-[10px]">Velocity</p>
-              <p className="text-xl font-mono text-cyan-400">{velocity.toFixed(2)} <span className="text-xs text-slate-500">mm/s</span></p>
-            </div>
-            <div className="bg-slate-800/50 p-2 rounded-lg border border-slate-700 mb-2">
-              <p className="text-slate-500 text-[10px] mb-1">Convergence</p>
-              <div className="h-24">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={history}>
-                    <YAxis hide domain={['auto', 'auto']} />
-                    <Line type="monotone" dataKey="v" stroke="#06b6d4" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-            <div className="flex justify-between items-center bg-slate-800/50 px-2 py-1.5 rounded-lg border border-slate-700">
-              <span className="text-slate-500 text-[10px]">Symmetry</span>
-              <span className="font-mono text-sm text-purple-400">{symmetry}%</span>
-            </div>
-          </div>
+          <RealtimeMetrics />
         </div>
 
-        {/* Right Column: Clinical Results */}
-        <div className="flex flex-col gap-2 overflow-y-auto min-h-0 pr-1">
-          <div className="glass-panel p-3 rounded-xl">
-            <h2 className="text-xs font-semibold mb-2 text-slate-300 uppercase tracking-wider">
-              원거리 <span className="text-slate-500 font-normal">Distance</span>
-            </h2>
-            <div className="divide-y divide-slate-700/50">
-              <MetricRow label="사위 Phoria" value={clinical.distPhoria} unit="Δ" />
-              <MetricRow label="양성상대폭주 PRC" value={clinical.distPRC} color="text-green-400" />
-              <MetricRow label="음성상대폭주 NRC" value={clinical.distNRC} color="text-red-400" />
-            </div>
-          </div>
-
-          <div className="glass-panel p-3 rounded-xl">
-            <h2 className="text-xs font-semibold mb-2 text-slate-300 uppercase tracking-wider">
-              근거리 <span className="text-slate-500 font-normal">Near</span>
-            </h2>
-            <div className="divide-y divide-slate-700/50">
-              <MetricRow label="사위 Phoria" value={clinical.nearPhoria} unit="Δ" />
-              <MetricRow label="양성상대폭주 PRC" value={clinical.nearPRC} color="text-green-400" />
-              <MetricRow label="음성상대폭주 NRC" value={clinical.nearNRC} color="text-red-400" />
-              <MetricRow label="양성상대조절 PRA" value={clinical.nearPRA} unit="D" color="text-green-400" />
-              <MetricRow label="음성상대조절 NRA" value={clinical.nearNRA} unit="D" color="text-red-400" />
-            </div>
-          </div>
-
-          <div className="glass-panel p-3 rounded-xl">
-            <h2 className="text-xs font-semibold mb-2 text-slate-300 uppercase tracking-wider">
-              추가측정 <span className="text-slate-500 font-normal">Additional</span>
-            </h2>
-            <div className="divide-y divide-slate-700/50">
-              <MetricRow label="AC/A Ratio" value={clinical.acA} color="text-amber-400" />
-              <MetricRow label="NPC" value={clinical.npc} unit="cm" color="text-amber-400" />
-              <MetricRow label="최대조절력" value={clinical.maxAccom} unit="D" color="text-amber-400" />
-            </div>
-          </div>
-        </div>
+        {/* 임상 결과 패널 — clinical 구독 (녹화 종료 시만 업데이트) */}
+        <ClinicalPanel />
       </main>
     </div>
   );

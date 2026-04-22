@@ -3,28 +3,22 @@
 import { useAnalysisStore } from './useAnalysisStore';
 import { useCallback, useRef, useEffect } from 'react';
 import { TrackingData } from '@/components/VideoAnalyzer';
+import { computeClinicalMetrics, AnalysisSample } from '@/utils/clinicalCalculations';
 
-// Constants
+// 지수 이동 평균 스무딩 계수
 const SMOOTHING_FACTOR = 0.3;
+// 대칭성 100%로 처리하는 최소 속도 임계값 (mm/s)
 const VELOCITY_THRESHOLD_MM = 1.0;
+// 픽셀 → mm 변환 계수
 const PIXEL_TO_MM = 0.45;
 
-// Assumed viewing distance for prism diopter calculations
-const VIEWING_DISTANCE_CM = 50;
-// Average adult PD (mm) for baseline reference
-const BASELINE_PD_MM = 63;
-
-interface AnalysisSample {
-    t: number;
-    pdMm: number;
-    velocityMmS: number;
-    symmetry: number;
-    leftX: number;
-    rightX: number;
-}
-
 export const useBinocularLogic = () => {
-    const { setVelocity, setSymmetry, addHistory, isRecording, setClinical } = useAnalysisStore();
+    const { updateFrame, isRecording, setClinical } = useAnalysisStore();
+
+    // isRecording을 ref로 관리 — processFrame의 의존성 배열에서 제거하여 콜백 identity 안정화
+    // (isRecording이 deps에 있으면 녹화 토글 시 processFrame → runLoop 재생성됨)
+    const isRecordingRef = useRef(isRecording);
+    useEffect(() => { isRecordingRef.current = isRecording; }, [isRecording]);
 
     const prevRef = useRef<{
         t: number;
@@ -35,107 +29,25 @@ export const useBinocularLogic = () => {
         smoothRightX: number;
     } | null>(null);
 
-    // Collect samples during recording
+    // 녹화 중 수집한 샘플 버퍼
     const samplesRef = useRef<AnalysisSample[]>([]);
     const baselinePdRef = useRef<number | null>(null);
     const wasRecordingRef = useRef(false);
+    // 히스토리 업데이트 쓰로틀링용 카운터 (3프레임마다 1회 갱신 ≈ 10fps)
+    const frameCountRef = useRef(0);
 
-    // Detect recording stop → compute clinical metrics
+    // 녹화 종료 감지 → 임상 지표 계산
     useEffect(() => {
         if (wasRecordingRef.current && !isRecording) {
-            computeClinicalMetrics();
+            const metrics = computeClinicalMetrics(samplesRef.current);
+            setClinical(metrics);
         }
         wasRecordingRef.current = isRecording;
         if (isRecording) {
             samplesRef.current = [];
             baselinePdRef.current = null;
         }
-    }, [isRecording]);
-
-    const computeClinicalMetrics = useCallback(() => {
-        const samples = samplesRef.current;
-        if (samples.length < 10) {
-            setClinical({
-                distPhoria: null, distPRC: null, distNRC: null,
-                nearPhoria: null, nearPRC: null, nearNRC: null,
-                nearPRA: null, nearNRA: null,
-                acA: null, npc: null, maxAccom: null,
-            });
-            return;
-        }
-
-        const pds = samples.map(s => s.pdMm);
-        const velocities = samples.map(s => s.velocityMmS);
-
-        // Baseline PD: average of first 30 samples (resting position)
-        const baselineCount = Math.min(30, Math.floor(samples.length * 0.1));
-        const baselinePd = pds.slice(0, baselineCount).reduce((a, b) => a + b, 0) / baselineCount;
-
-        const avgPd = pds.reduce((a, b) => a + b, 0) / pds.length;
-        const minPd = Math.min(...pds);
-        const maxPd = Math.max(...pds);
-
-        // PD deviation from baseline (mm) → Prism Diopters (Δ)
-        // 1 Δ = 1cm deflection at 1m = 0.5cm at 50cm
-        // Δ = deviation_mm / (viewing_distance_cm * 0.1)
-        const mmToD = (mm: number) => parseFloat((mm / (VIEWING_DISTANCE_CM * 0.1)).toFixed(1));
-
-        // --- Phoria (사위) ---
-        // Deviation of average PD from baseline resting PD
-        const pdDeviation = avgPd - baselinePd;
-        const distPhoria = mmToD(pdDeviation);
-        const nearPhoria = mmToD(pdDeviation * 1.5); // Near phoria typically larger
-
-        // --- Convergence range ---
-        // PRC (양성상대폭주): max convergence = baseline - minPD
-        const maxConvergence = baselinePd - minPd;
-        // NRC (음성상대폭주): max divergence = maxPD - baseline
-        const maxDivergence = maxPd - baselinePd;
-
-        const prcD = mmToD(maxConvergence);
-        const nrcD = mmToD(maxDivergence);
-
-        // Break/Recovery estimation (break ≈ max, recovery ≈ 70% of max)
-        const distPRC = `${prcD}/${(prcD * 0.7).toFixed(1)}`;
-        const distNRC = `${nrcD}/${(nrcD * 0.7).toFixed(1)}`;
-        const nearPRC = `${(prcD * 1.3).toFixed(1)}/${(prcD * 0.9).toFixed(1)}`;
-        const nearNRC = `${(nrcD * 0.8).toFixed(1)}/${(nrcD * 0.5).toFixed(1)}`;
-
-        // --- Accommodation (조절) ---
-        // Estimated from convergence-accommodation coupling
-        const nearPRA = parseFloat((maxConvergence * 0.4 / (VIEWING_DISTANCE_CM * 0.1)).toFixed(2));
-        const nearNRA = parseFloat((maxDivergence * 0.3 / (VIEWING_DISTANCE_CM * 0.1)).toFixed(2));
-
-        // --- AC/A Ratio ---
-        // Calculated AC/A = (near phoria - dist phoria + interp PD) / accommodation
-        const accom = 100 / VIEWING_DISTANCE_CM; // 2D at 50cm
-        const acA = parseFloat((Math.abs(nearPhoria - distPhoria) / accom + BASELINE_PD_MM / 10).toFixed(1));
-
-        // --- NPC (근거리폭주근점) ---
-        // Estimated from minimum PD: smaller PD = stronger convergence = closer NPC
-        // NPC (cm) ≈ (baseline_PD / max_convergence_PD) * viewing_distance
-        const convergenceRatio = minPd > 0 ? baselinePd / minPd : 1;
-        const npc = parseFloat((VIEWING_DISTANCE_CM / convergenceRatio).toFixed(1));
-
-        // --- Max Accommodation (최대조절력) ---
-        // Estimated: younger adults ~10D, decreases with age
-        // From convergence data: max_accom ≈ max_convergence_Δ / AC/A
-        const maxAccom = parseFloat((prcD / Math.max(acA, 1)).toFixed(1));
-
-        setClinical({
-            distPhoria,
-            distPRC,
-            distNRC,
-            nearPhoria,
-            nearPRC,
-            nearNRC,
-            nearPRA,
-            nearNRA,
-            acA,
-            npc,
-            maxAccom,
-        });
-    }, [setClinical]);
+    }, [isRecording, setClinical]);
 
     const processFrame = useCallback((data: TrackingData) => {
         const currentT = data.timestamp;
@@ -143,6 +55,7 @@ export const useBinocularLogic = () => {
         const rawLeftX = data.leftIris.x * data.videoWidth;
         const rawRightX = data.rightIris.x * data.videoWidth;
 
+        // 지수 이동 평균으로 노이즈 제거
         let smoothLeftX = rawLeftX;
         let smoothRightX = rawRightX;
 
@@ -158,7 +71,7 @@ export const useBinocularLogic = () => {
 
         if (prevRef.current) {
             const dt = (currentT - prevRef.current.t) / 1000;
-            if (dt > 0) {
+            if (dt > 0 && !isNaN(dt)) {
                 const dPD = currentPDMm - prevRef.current.pdMm;
                 velocityMmPerSec = dPD / dt;
 
@@ -178,12 +91,15 @@ export const useBinocularLogic = () => {
             }
         }
 
-        setVelocity(Math.abs(velocityMmPerSec));
-        setSymmetry(Math.round(symmetryScore));
-        addHistory(currentT, velocityMmPerSec);
+        // 히스토리는 3프레임마다 갱신 — 차트 리렌더 빈도를 ~30fps → ~10fps로 절감
+        frameCountRef.current = (frameCountRef.current + 1) % 900;
+        const addToHistory = frameCountRef.current % 3 === 0;
 
-        // Collect samples during recording
-        if (isRecording) {
+        // velocity, symmetry, history를 단일 set()으로 배치 업데이트 (기존 3회 → 1회)
+        updateFrame(Math.abs(velocityMmPerSec), Math.round(symmetryScore), currentT, velocityMmPerSec, addToHistory);
+
+        // isRecordingRef로 읽어 콜백 재생성 없이 현재 녹화 상태 확인
+        if (isRecordingRef.current) {
             if (baselinePdRef.current === null) {
                 baselinePdRef.current = currentPDMm;
             }
@@ -203,10 +119,10 @@ export const useBinocularLogic = () => {
             rightX: rawRightX,
             pdMm: currentPDMm,
             smoothLeftX,
-            smoothRightX
+            smoothRightX,
         };
 
-    }, [isRecording, setVelocity, setSymmetry, addHistory]);
+    }, [updateFrame]); // isRecording 제거 — ref로 읽어 콜백 identity 유지
 
     return { processFrame };
 };

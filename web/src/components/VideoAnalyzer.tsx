@@ -2,16 +2,24 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Camera, RefreshCw } from 'lucide-react';
-import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
+import { FaceLandmarker, FilesetResolver, NormalizedLandmark } from "@mediapipe/tasks-vision";
 import clsx from 'clsx';
 
-const getCentroid = (landmarks: any[], indices: number[]) => {
+// 얼굴 윤곽 랜드마크 인덱스 (36개) — 바운딩 박스용
+// 478개 전체 순회 대비 ~13배 반복 횟수 감소
+const FACE_OVAL_INDICES = [
+  10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
+  397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136,
+  172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109,
+] as const;
+
+const getCentroid = (landmarks: NormalizedLandmark[], indices: readonly number[]) => {
   let x = 0, y = 0, z = 0;
-  indices.forEach(idx => {
+  for (const idx of indices) {
     x += landmarks[idx].x;
     y += landmarks[idx].y;
     z += landmarks[idx].z;
-  });
+  }
   return { x: x / indices.length, y: y / indices.length, z: z / indices.length };
 };
 
@@ -44,7 +52,7 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
   const detectCountRef = useRef(0);
   const faceCountRef = useRef(0);
 
-  // Initialize MediaPipe
+  // MediaPipe 초기화
   useEffect(() => {
     let ignore = false;
     const initMediaPipe = async () => {
@@ -56,6 +64,7 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
 
         let landmarker: FaceLandmarker;
         try {
+          // GPU delegate 우선 시도
           landmarker = await FaceLandmarker.createFromOptions(vision, {
             baseOptions: {
               modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
@@ -65,7 +74,8 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
             runningMode: "VIDEO",
             numFaces: 1
           });
-        } catch (gpuError) {
+        } catch {
+          // GPU 실패 시 CPU fallback
           if (ignore) return;
           landmarker = await FaceLandmarker.createFromOptions(vision, {
             baseOptions: {
@@ -82,9 +92,9 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
         faceLandmarkerRef.current = landmarker;
         setIsReady(true);
         setErrorMsg(null);
-      } catch (error: any) {
+      } catch (error: unknown) {
         if (!ignore) {
-          setErrorMsg(error.message || "Failed to load AI Model.");
+          setErrorMsg(error instanceof Error ? error.message : "Failed to load AI Model.");
         }
       }
     };
@@ -98,7 +108,7 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
     };
   }, []);
 
-  // Start camera
+  // 카메라 시작
   const startCamera = useCallback(async (selectedDeviceId?: string) => {
     try {
       if (streamRef.current) {
@@ -129,8 +139,8 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
       if (!selectedDeviceId && videoDevices.length > 0) {
         setDeviceId(videoDevices[0].deviceId);
       }
-    } catch (err: any) {
-      setErrorMsg(err.message || "Camera access failed");
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : "Camera access failed");
     }
   }, []);
 
@@ -148,7 +158,7 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
     startCamera(newDeviceId);
   }, [startCamera]);
 
-  // Main render loop
+  // 메인 렌더 루프
   const runLoop = useCallback(() => {
     try {
       const video = videoRef.current;
@@ -164,8 +174,8 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
       const vw = video.videoWidth;
       const vh = video.videoHeight;
 
-      // Update debug info every 30 frames
-      if (frameCountRef.current % 30 === 0) {
+      // 디버그 정보는 개발 환경에서만 30프레임마다 업데이트
+      if (process.env.NODE_ENV === 'development' && frameCountRef.current % 30 === 0) {
         setDebugInfo(
           `ready:${readyState} model:${hasModel} video:${vw}x${vh} frames:${frameCountRef.current} detects:${detectCountRef.current} faces:${faceCountRef.current}`
         );
@@ -178,16 +188,16 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
         }
         const ctx = canvas.getContext('2d');
         if (ctx) {
-          // Draw mirrored video
+          // 미러링된 비디오 프레임 그리기
           ctx.save();
           ctx.translate(vw, 0);
           ctx.scale(-1, 1);
           ctx.drawImage(video, 0, 0, vw, vh);
           ctx.restore();
 
-          frameCountRef.current++;
+          // 프레임 카운터 (900으로 순환 — 30fps 기준 30초 주기)
+          frameCountRef.current = (frameCountRef.current + 1) % 900;
 
-          // Run detection on every frame (currentTime check unreliable for live MediaStream on Safari)
           if (hasModel) {
             try {
               const results = faceLandmarkerRef.current!.detectForVideo(video, performance.now());
@@ -197,8 +207,8 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
                 faceCountRef.current++;
                 const landmarks = results.faceLandmarks[0];
 
-                const rightIrisIndices = [474, 475, 476, 477];
-                const leftIrisIndices = [469, 470, 471, 472];
+                const rightIrisIndices = [474, 475, 476, 477] as const;
+                const leftIrisIndices = [469, 470, 471, 472] as const;
                 const rightIrisCenter = getCentroid(landmarks, rightIrisIndices);
                 const leftIrisCenter = getCentroid(landmarks, leftIrisIndices);
 
@@ -207,19 +217,20 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
                   ctx.translate(vw, 0);
                   ctx.scale(-1, 1);
 
-                  // Face bounding box
+                  // 얼굴 바운딩 박스 — FACE_OVAL_INDICES(36개)만 순회 (478개 전체 대비 13배 빠름)
                   let minX = 1, minY = 1, maxX = 0, maxY = 0;
-                  landmarks.forEach(lm => {
+                  for (const idx of FACE_OVAL_INDICES) {
+                    const lm = landmarks[idx];
                     if (lm.x < minX) minX = lm.x;
                     if (lm.y < minY) minY = lm.y;
                     if (lm.x > maxX) maxX = lm.x;
                     if (lm.y > maxY) maxY = lm.y;
-                  });
+                  }
                   ctx.strokeStyle = '#22c55e';
                   ctx.lineWidth = 3;
                   ctx.strokeRect(minX * vw, minY * vh, (maxX - minX) * vw, (maxY - minY) * vh);
 
-                  // Iris markers
+                  // 홍채 중심점 마커
                   ctx.fillStyle = '#06b6d4';
                   ctx.beginPath();
                   ctx.arc(rightIrisCenter.x * vw, rightIrisCenter.y * vh, 5, 0, 2 * Math.PI);
@@ -230,8 +241,8 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
                   ctx.arc(leftIrisCenter.x * vw, leftIrisCenter.y * vh, 5, 0, 2 * Math.PI);
                   ctx.fill();
 
-                  // Iris connectors
-                  const drawIrisConnector = (indices: number[], color: string) => {
+                  // 홍채 윤곽선
+                  const drawIrisConnector = (indices: readonly number[], color: string) => {
                     ctx.strokeStyle = color;
                     ctx.lineWidth = 1;
                     ctx.beginPath();
@@ -260,7 +271,7 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
                 }
               }
             } catch (detectError) {
-              // Don't let detection errors kill the loop
+              // 감지 오류가 루프를 중단하지 않도록 처리
               if (frameCountRef.current % 60 === 0) {
                 console.error("Detection error:", detectError);
               }
@@ -305,7 +316,7 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
           )}
         </div>
       )}
-      {/* Video: behind canvas, keeps decoding frames */}
+      {/* Video: 뒤에서 프레임 디코딩 유지 */}
       <video
         ref={videoRef}
         playsInline
@@ -313,12 +324,14 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
         autoPlay
         style={{ position: 'absolute', zIndex: 0, width: '100%', height: '100%', objectFit: 'contain' }}
       />
-      {/* Canvas on top: draws video frame + overlay */}
+      {/* Canvas: 미러링된 비디오 프레임 + 오버레이 */}
       <canvas ref={canvasRef} style={{ position: 'absolute', zIndex: 1, width: '100%', height: '100%', objectFit: 'contain' }} />
-      {/* Debug info bar */}
-      <div className="absolute top-2 left-2 right-2 z-30 text-sm font-mono text-yellow-400 bg-black/80 px-3 py-2 rounded">
-        {debugInfo}
-      </div>
+      {/* 디버그 정보 바 — 개발 환경에서만 표시 */}
+      {process.env.NODE_ENV === 'development' && (
+        <div className="absolute top-2 left-2 right-2 z-30 text-sm font-mono text-yellow-400 bg-black/80 px-3 py-2 rounded">
+          {debugInfo}
+        </div>
+      )}
       <div className="absolute bottom-4 left-4 right-4 flex justify-between items-center glass-panel p-3 rounded-xl z-20">
         <div className="flex items-center gap-2">
           <Camera className="w-5 h-5 text-cyan-400" />

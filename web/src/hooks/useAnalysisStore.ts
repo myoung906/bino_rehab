@@ -26,6 +26,9 @@ interface AnalysisState {
     toggleRecording: () => void;
     addHistory: (t: number, v: number) => void;
     setClinical: (updates: Partial<ClinicalMetrics>) => void;
+    // 프레임당 velocity, symmetry, history를 단일 set()으로 배치 업데이트
+    // addToHistory: 3프레임마다 true — 차트 리렌더 빈도 1/3로 절감
+    updateFrame: (velocity: number, symmetry: number, t: number, vel: number, addToHistory: boolean) => void;
 }
 
 const defaultClinical: ClinicalMetrics = {
@@ -54,4 +57,11 @@ export const useAnalysisStore = create<AnalysisState>((set) => ({
     toggleRecording: () => set((state) => ({ isRecording: !state.isRecording, history: state.isRecording ? state.history : [] })),
     addHistory: (t, v) => set((state) => ({ history: [...state.history.slice(-100), { t, v }] })),
     setClinical: (updates) => set((state) => ({ clinical: { ...state.clinical, ...updates } })),
+    // 단일 배치 업데이트 — 프레임당 set() 호출 3회 → 1회로 리렌더 절감
+    updateFrame: (velocity, symmetry, t, vel, addToHistory) =>
+        set((state) => ({
+            velocity,
+            symmetry,
+            ...(addToHistory ? { history: [...state.history.slice(-100), { t, v: vel }] } : {}),
+        })),
 }));
