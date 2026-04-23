@@ -44,6 +44,7 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
   const [deviceId, setDeviceId] = useState<string>('');
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const faceLandmarkerRef = useRef<FaceLandmarker | null>(null);
+  const mpCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const streamRef = useRef<MediaStream | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -65,20 +66,46 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
         );
         if (ignore) return;
 
-        // CPU delegate 사용 — macOS WebGL GPU delegate는 face detector ROI를
-        // 잘못 계산하는 known issue가 있어 안정적인 CPU 사용
-        const landmarker = await FaceLandmarker.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
-            delegate: "CPU"
-          },
-          outputFaceBlendshapes: false,
-          runningMode: "VIDEO",
-          numFaces: 1,
-          minFaceDetectionConfidence: 0.3,
-          minFacePresenceConfidence: 0.3,
-          minTrackingConfidence: 0.3,
-        });
+        // MediaPipe 전용 오프스크린 캔버스 생성
+        // CPU/GPU 모두 이미지 전처리에 WebGL(GLctx) 필요 — 드로잉 캔버스(2D ctx)와 분리 필수
+        const mpCanvas = document.createElement('canvas');
+        mpCanvas.width = 1280;
+        mpCanvas.height = 720;
+        mpCanvasRef.current = mpCanvas;
+
+        let landmarker: FaceLandmarker;
+        try {
+          // GPU delegate 우선 (성능)
+          landmarker = await FaceLandmarker.createFromOptions(vision, {
+            baseOptions: {
+              modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
+              delegate: "GPU"
+            },
+            canvas: mpCanvas,
+            outputFaceBlendshapes: false,
+            runningMode: "VIDEO",
+            numFaces: 1,
+            minFaceDetectionConfidence: 0.3,
+            minFacePresenceConfidence: 0.3,
+            minTrackingConfidence: 0.3,
+          });
+        } catch {
+          if (ignore) return;
+          // GPU 실패 시 CPU fallback — 동일 캔버스 재사용
+          landmarker = await FaceLandmarker.createFromOptions(vision, {
+            baseOptions: {
+              modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
+              delegate: "CPU"
+            },
+            canvas: mpCanvas,
+            outputFaceBlendshapes: false,
+            runningMode: "VIDEO",
+            numFaces: 1,
+            minFaceDetectionConfidence: 0.3,
+            minFacePresenceConfidence: 0.3,
+            minTrackingConfidence: 0.3,
+          });
+        }
 
         if (ignore) { landmarker.close(); return; }
         faceLandmarkerRef.current = landmarker;
@@ -97,6 +124,7 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
         faceLandmarkerRef.current.close();
         faceLandmarkerRef.current = null;
       }
+      mpCanvasRef.current = null;
     };
   }, []);
 
