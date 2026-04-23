@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+package-lock.json
+yarn.lock
+
+# Next.js
+web/out/
+web/.next/
+
+# Build outputs
+desktop/src-tauri/target/
+mobile/android/build/
+mobile/android/.gradle/
+mobile/ios/build/
+
+# Mobile
+*.apk
+*.ipa
+*.aab
+*.xcarchive
+
+# Windows
+*.msi
+*.exe
+*.dmg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Keys
+*.jks
+*.keystore
+
+# Misc
+.env.local
+.env.*.local
+dist/

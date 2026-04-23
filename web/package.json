@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:gh-pages": "BUILD_TARGET=gh-pages next build",
+    "build:standalone": "BUILD_TARGET=standalone next build",
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
