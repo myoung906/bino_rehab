@@ -129,47 +129,68 @@ export default function Home() {
   const setUserAge = useAnalysisStore((s) => s.setUserAge);
 
   return (
-    <div className="grid grid-rows-[auto_1fr] h-screen p-3 gap-3 font-[family-name:var(--font-geist-sans)] overflow-hidden">
-      <header className="flex justify-between items-center glass-panel px-4 py-2 rounded-xl">
-        <h1 className="text-lg font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-blue-500">
+    <div className="grid grid-rows-[auto_1fr] h-screen p-2 md:p-3 gap-2 md:gap-3 font-[family-name:var(--font-geist-sans)] overflow-hidden">
+      <header className="flex flex-wrap justify-between items-center gap-2 glass-panel px-3 md:px-4 py-2 rounded-xl">
+        <h1 className="text-sm md:text-lg font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-blue-500">
           Binocular Vision Rehab
         </h1>
-        <div className="flex items-center gap-3">
-          <label className="flex items-center gap-1.5 text-xs text-slate-400">
-            나이
+        <div className="flex items-center gap-2 md:gap-3">
+          <label className="flex items-center gap-1 md:gap-1.5 text-[10px] md:text-xs text-slate-400">
+            <span className="hidden sm:inline">나이</span>
             <input
               type="number"
               placeholder="나이"
               min={5}
               max={80}
-              className="w-14 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-300 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+              className="w-12 md:w-14 bg-slate-800 border border-slate-600 rounded px-1.5 md:px-2 py-1 text-[10px] md:text-xs text-slate-300 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
               value={userAge ?? ''}
               onChange={(e) => setUserAge(e.target.value ? parseInt(e.target.value) : undefined)}
             />
           </label>
           <button
             onClick={toggleRecording}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${isRecording ? 'bg-red-500/20 text-red-400 border border-red-500 hover:bg-red-500/30' : 'bg-cyan-500/20 text-cyan-400 border border-cyan-500 hover:bg-cyan-500/30'}`}
+            className={`px-2 md:px-3 py-1 md:py-1.5 rounded-lg text-[10px] md:text-xs font-semibold transition-all ${isRecording ? 'bg-red-500/20 text-red-400 border border-red-500 hover:bg-red-500/30' : 'bg-cyan-500/20 text-cyan-400 border border-cyan-500 hover:bg-cyan-500/30'}`}
           >
-            {isRecording ? 'STOP ANALYSIS' : 'START ANALYSIS'}
+            <span className="hidden sm:inline">{isRecording ? 'STOP ANALYSIS' : 'START ANALYSIS'}</span>
+            <span className="sm:hidden">{isRecording ? 'STOP' : 'START'}</span>
           </button>
         </div>
       </header>
 
-      <main className="grid grid-cols-[1fr_240px_240px] gap-3 min-h-0">
+      <main className="flex flex-col md:grid md:grid-cols-[2fr_1fr] lg:grid-cols-[1fr_240px_240px] gap-2 md:gap-3 min-h-0 overflow-hidden">
         {/* 비디오 영역 */}
-        <div className="min-h-0">
+        <div className="h-[35vh] sm:h-[40vh] md:h-auto md:min-h-0 flex-shrink-0">
           <VideoAnalyzer onFrame={processFrame} />
         </div>
 
-        {/* 실시간 메트릭 패널 — velocity/symmetry 구독 */}
-        <div className="flex flex-col gap-2 overflow-y-auto min-h-0 pr-1">
+        {/* 태블릿: 오른쪽 열에 메트릭+임상 세로 스택 */}
+        <div className="hidden md:flex md:flex-col lg:hidden gap-2 overflow-y-auto min-h-0 pr-1">
+          <RealtimeMetrics />
+          <CalibrationPanel />
+          <ClinicalPanel />
+        </div>
+
+        {/* 데스크탑: 실시간 메트릭 패널 (2번째 열) */}
+        <div className="hidden lg:flex lg:flex-col gap-2 overflow-y-auto min-h-0 pr-1">
           <RealtimeMetrics />
           <CalibrationPanel />
         </div>
 
-        {/* 임상 결과 패널 — clinical 구독 (녹화 종료 시만 업데이트) */}
-        <ClinicalPanel />
+        {/* 데스크탑: 임상 결과 패널 (3번째 열) */}
+        <div className="hidden lg:block overflow-y-auto min-h-0">
+          <ClinicalPanel />
+        </div>
+
+        {/* 모바일: 실시간 메트릭 */}
+        <div className="flex md:hidden flex-col gap-2 max-h-[30vh] sm:max-h-[35vh] overflow-y-auto pr-1">
+          <RealtimeMetrics />
+          <CalibrationPanel />
+        </div>
+
+        {/* 모바일: 임상 결과 */}
+        <div className="flex md:hidden flex-col gap-2 max-h-[30vh] overflow-y-auto pr-1">
+          <ClinicalPanel />
+        </div>
       </main>
     </div>
   );
