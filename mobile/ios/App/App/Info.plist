@@ -45,5 +45,9 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Eye tracking analysis requires camera access to track eye movements and analyze binocular vision rehabilitation.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Camera access may request microphone permission, though it is not used by this app.</string>
 </dict>
 </plist>
