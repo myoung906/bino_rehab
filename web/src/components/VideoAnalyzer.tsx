@@ -27,6 +27,10 @@ export interface TrackingData {
   timestamp: number;
   rightIris: { x: number; y: number; z: number };
   leftIris: { x: number; y: number; z: number };
+  leftIrisWidth: number;   // |lm[469].x - lm[471].x| * videoWidth (홍채 수평 폭 px)
+  rightIrisWidth: number;  // |lm[474].x - lm[476].x| * videoWidth
+  leftPupilRadius: number; // iris 면적 proxy (irisWidth * irisHeight)
+  rightPupilRadius: number;
   videoWidth: number;
   videoHeight: number;
 }
@@ -300,10 +304,23 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
                 }
 
                 if (onFrame) {
+                  // 홍채 수평/수직 폭 (px)
+                  const leftIrisWidth = Math.abs(landmarks[469].x - landmarks[471].x) * vw;
+                  const rightIrisWidth = Math.abs(landmarks[474].x - landmarks[476].x) * vw;
+                  // 동공 크기 proxy: iris 타원 면적 ≈ width * height
+                  const leftIrisHeight = Math.abs(landmarks[470].y - landmarks[472].y) * vh;
+                  const rightIrisHeight = Math.abs(landmarks[475].y - landmarks[477].y) * vh;
+                  const leftPupilRadius = leftIrisWidth * leftIrisHeight;
+                  const rightPupilRadius = rightIrisWidth * rightIrisHeight;
+
                   onFrame({
                     timestamp: performance.now(),
                     rightIris: rightIrisCenter,
                     leftIris: leftIrisCenter,
+                    leftIrisWidth,
+                    rightIrisWidth,
+                    leftPupilRadius,
+                    rightPupilRadius,
                     videoWidth: vw,
                     videoHeight: vh
                   });

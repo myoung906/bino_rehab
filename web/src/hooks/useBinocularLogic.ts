@@ -9,18 +9,24 @@ import { computeClinicalMetrics, AnalysisSample } from '@/utils/clinicalCalculat
 const SMOOTHING_FACTOR = 0.3;
 // 대칭성 100%로 처리하는 최소 속도 임계값 (mm/s)
 const VELOCITY_THRESHOLD_MM = 1.0;
-// 픽셀 → mm 변환 계수
-const PIXEL_TO_MM = 0.45;
+// 인간 홍채 수평 지름 (인종 불문 상수)
+const IRIS_REAL_MM = 11.7;
+// 웹캠 기본 FOV (degree)
+const DEFAULT_FOV_DEG = 60;
 
 export const useBinocularLogic = () => {
     const updateFrame = useAnalysisStore((s) => s.updateFrame);
     const isRecording = useAnalysisStore((s) => s.isRecording);
     const setClinical = useAnalysisStore((s) => s.setClinical);
+    const setCalibration = useAnalysisStore((s) => s.setCalibration);
+    const userAge = useAnalysisStore((s) => s.userAge);
 
     // isRecording을 ref로 관리 — processFrame의 의존성 배열에서 제거하여 콜백 identity 안정화
-    // (isRecording이 deps에 있으면 녹화 토글 시 processFrame → runLoop 재생성됨)
     const isRecordingRef = useRef(isRecording);
     useEffect(() => { isRecordingRef.current = isRecording; }, [isRecording]);
+
+    const userAgeRef = useRef(userAge);
+    useEffect(() => { userAgeRef.current = userAge; }, [userAge]);
 
     const prevRef = useRef<{
         t: number;
@@ -31,17 +37,26 @@ export const useBinocularLogic = () => {
         smoothRightX: number;
     } | null>(null);
 
+    // 자동 보정 상태
+    const calibRef = useRef({
+        pixelToMm: 0,
+        distanceCm: 0,
+        ipdMm: 0,
+    });
+
     // 녹화 중 수집한 샘플 버퍼
     const samplesRef = useRef<AnalysisSample[]>([]);
     const baselinePdRef = useRef<number | null>(null);
     const wasRecordingRef = useRef(false);
     // 히스토리 업데이트 쓰로틀링용 카운터 (3프레임마다 1회 갱신 ≈ 10fps)
     const frameCountRef = useRef(0);
+    // 보정 정보 store 갱신 쓰로틀링 (30프레임마다)
+    const calibUpdateCountRef = useRef(0);
 
     // 녹화 종료 감지 → 임상 지표 계산
     useEffect(() => {
         if (wasRecordingRef.current && !isRecording) {
-            const metrics = computeClinicalMetrics(samplesRef.current);
+            const metrics = computeClinicalMetrics(samplesRef.current, userAgeRef.current);
             setClinical(metrics);
         }
         wasRecordingRef.current = isRecording;
@@ -57,6 +72,24 @@ export const useBinocularLogic = () => {
         const rawLeftX = data.leftIris.x * data.videoWidth;
         const rawRightX = data.rightIris.x * data.videoWidth;
 
+        // --- 자동 보정 (iris 기반 pixel → mm) ---
+        const avgIrisWidthPx = (data.leftIrisWidth + data.rightIrisWidth) / 2;
+        if (avgIrisWidthPx > 5) {
+            const rawPixelToMm = IRIS_REAL_MM / avgIrisWidthPx;
+            calibRef.current.pixelToMm = calibRef.current.pixelToMm === 0
+                ? rawPixelToMm
+                : calibRef.current.pixelToMm * 0.95 + rawPixelToMm * 0.05;
+
+            // 거리 추정: FOV 기반 focal length
+            const focalLengthPx = (data.videoWidth / 2) / Math.tan((DEFAULT_FOV_DEG / 2) * Math.PI / 180);
+            const distanceCm = (IRIS_REAL_MM * focalLengthPx) / (avgIrisWidthPx * 10);
+            calibRef.current.distanceCm = calibRef.current.distanceCm === 0
+                ? distanceCm
+                : calibRef.current.distanceCm * 0.95 + distanceCm * 0.05;
+        }
+
+        const pixelToMm = calibRef.current.pixelToMm || 0.45; // fallback
+
         // 지수 이동 평균으로 노이즈 제거
         let smoothLeftX = rawLeftX;
         let smoothRightX = rawRightX;
@@ -66,7 +99,12 @@ export const useBinocularLogic = () => {
             smoothRightX = prevRef.current.smoothRightX + SMOOTHING_FACTOR * (rawRightX - prevRef.current.smoothRightX);
         }
 
-        const currentPDMm = Math.abs(smoothLeftX - smoothRightX) * PIXEL_TO_MM;
+        const currentPDMm = Math.abs(smoothLeftX - smoothRightX) * pixelToMm;
+
+        // IPD 자동 측정 (매우 느린 EMA)
+        calibRef.current.ipdMm = calibRef.current.ipdMm === 0
+            ? currentPDMm
+            : calibRef.current.ipdMm * 0.97 + currentPDMm * 0.03;
 
         let velocityMmPerSec = 0;
         let symmetryScore = 0;
@@ -77,8 +115,8 @@ export const useBinocularLogic = () => {
                 const dPD = currentPDMm - prevRef.current.pdMm;
                 velocityMmPerSec = dPD / dt;
 
-                const dLeft = (smoothLeftX - prevRef.current.smoothLeftX) * PIXEL_TO_MM / dt;
-                const dRight = (smoothRightX - prevRef.current.smoothRightX) * PIXEL_TO_MM / dt;
+                const dLeft = (smoothLeftX - prevRef.current.smoothLeftX) * pixelToMm / dt;
+                const dRight = (smoothRightX - prevRef.current.smoothRightX) * pixelToMm / dt;
 
                 const speedLeft = Math.abs(dLeft);
                 const speedRight = Math.abs(dRight);
@@ -100,6 +138,19 @@ export const useBinocularLogic = () => {
         // velocity, symmetry, history를 단일 set()으로 배치 업데이트 (기존 3회 → 1회)
         updateFrame(Math.abs(velocityMmPerSec), Math.round(symmetryScore), currentT, velocityMmPerSec, addToHistory);
 
+        // 보정 정보를 30프레임마다 store에 갱신
+        calibUpdateCountRef.current++;
+        if (calibUpdateCountRef.current % 30 === 0 && calibRef.current.pixelToMm > 0) {
+            setCalibration({
+                pixelToMm: calibRef.current.pixelToMm,
+                distanceCm: calibRef.current.distanceCm,
+                ipdMm: calibRef.current.ipdMm,
+            });
+        }
+
+        // 동공 크기 proxy
+        const pupilProxy = ((data.leftPupilRadius || 0) + (data.rightPupilRadius || 0)) / 2;
+
         // isRecordingRef로 읽어 콜백 재생성 없이 현재 녹화 상태 확인
         if (isRecordingRef.current) {
             if (baselinePdRef.current === null) {
@@ -112,6 +163,9 @@ export const useBinocularLogic = () => {
                 symmetry: Math.round(symmetryScore),
                 leftX: smoothLeftX,
                 rightX: smoothRightX,
+                pupilProxy,
+                pixelToMm,
+                distanceCm: calibRef.current.distanceCm || 50,
             });
         }
 
@@ -124,7 +178,7 @@ export const useBinocularLogic = () => {
             smoothRightX,
         };
 
-    }, [updateFrame]); // isRecording 제거 — ref로 읽어 콜백 identity 유지
+    }, [updateFrame, setCalibration]); // isRecording 제거 — ref로 읽어 콜백 identity 유지
 
     return { processFrame };
 };

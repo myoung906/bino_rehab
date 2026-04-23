@@ -101,11 +101,32 @@ const ClinicalPanel = memo(() => {
 });
 ClinicalPanel.displayName = 'ClinicalPanel';
 
+// calibration만 구독 — 30프레임마다만 갱신
+const CalibrationPanel = memo(() => {
+  const calibration = useAnalysisStore((s) => s.calibration);
+  if (calibration.pixelToMm === 0) return null;
+  return (
+    <div className="glass-panel p-3 rounded-xl">
+      <h2 className="text-xs font-semibold mb-2 text-slate-300 uppercase tracking-wider">
+        보정 <span className="text-slate-500 font-normal">Calibration</span>
+      </h2>
+      <div className="divide-y divide-slate-700/50">
+        <MetricRow label="PX→mm 계수" value={calibration.pixelToMm.toFixed(3)} />
+        <MetricRow label="추정 거리" value={calibration.distanceCm.toFixed(0)} unit="cm" />
+        <MetricRow label="IPD" value={calibration.ipdMm.toFixed(1)} unit="mm" />
+      </div>
+    </div>
+  );
+});
+CalibrationPanel.displayName = 'CalibrationPanel';
+
 export default function Home() {
   const { processFrame } = useBinocularLogic();
   // isRecording, toggleRecording만 구독 — 프레임 업데이트 시 Home 리렌더 없음
   const isRecording = useAnalysisStore((s) => s.isRecording);
   const toggleRecording = useAnalysisStore((s) => s.toggleRecording);
+  const userAge = useAnalysisStore((s) => s.userAge);
+  const setUserAge = useAnalysisStore((s) => s.setUserAge);
 
   return (
     <div className="grid grid-rows-[auto_1fr] h-screen p-3 gap-3 font-[family-name:var(--font-geist-sans)] overflow-hidden">
@@ -113,12 +134,26 @@ export default function Home() {
         <h1 className="text-lg font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-blue-500">
           Binocular Vision Rehab
         </h1>
-        <button
-          onClick={toggleRecording}
-          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${isRecording ? 'bg-red-500/20 text-red-400 border border-red-500 hover:bg-red-500/30' : 'bg-cyan-500/20 text-cyan-400 border border-cyan-500 hover:bg-cyan-500/30'}`}
-        >
-          {isRecording ? 'STOP ANALYSIS' : 'START ANALYSIS'}
-        </button>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-1.5 text-xs text-slate-400">
+            나이
+            <input
+              type="number"
+              placeholder="나이"
+              min={5}
+              max={80}
+              className="w-14 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-300 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+              value={userAge ?? ''}
+              onChange={(e) => setUserAge(e.target.value ? parseInt(e.target.value) : undefined)}
+            />
+          </label>
+          <button
+            onClick={toggleRecording}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${isRecording ? 'bg-red-500/20 text-red-400 border border-red-500 hover:bg-red-500/30' : 'bg-cyan-500/20 text-cyan-400 border border-cyan-500 hover:bg-cyan-500/30'}`}
+          >
+            {isRecording ? 'STOP ANALYSIS' : 'START ANALYSIS'}
+          </button>
+        </div>
       </header>
 
       <main className="grid grid-cols-[1fr_240px_240px] gap-3 min-h-0">
@@ -130,6 +165,7 @@ export default function Home() {
         {/* 실시간 메트릭 패널 — velocity/symmetry 구독 */}
         <div className="flex flex-col gap-2 overflow-y-auto min-h-0 pr-1">
           <RealtimeMetrics />
+          <CalibrationPanel />
         </div>
 
         {/* 임상 결과 패널 — clinical 구독 (녹화 종료 시만 업데이트) */}
