@@ -56,6 +56,18 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
   const lastFaceDetectedRef = useRef(false);
   const lastDetectErrorRef = useRef<string>('');
 
+  // MediaPipe WASM이 stderr로 출력하는 INFO 메시지를 Next.js dev overlay가
+  // console.error로 가로채 에러처럼 표시하는 문제 억제 (개발 환경 한정)
+  useEffect(() => {
+    if (process.env.NODE_ENV !== 'development') return;
+    const orig = console.error.bind(console);
+    console.error = (...args: unknown[]) => {
+      if (typeof args[0] === 'string' && args[0].startsWith('INFO:')) return;
+      orig(...args);
+    };
+    return () => { console.error = orig; };
+  }, []);
+
   // MediaPipe 초기화
   useEffect(() => {
     let ignore = false;
