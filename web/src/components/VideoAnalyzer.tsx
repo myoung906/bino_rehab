@@ -44,7 +44,7 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
   const [deviceId, setDeviceId] = useState<string>('');
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const faceLandmarkerRef = useRef<FaceLandmarker | null>(null);
-  const lastVideoTimeRef = useRef<number>(-1);
+
   const streamRef = useRef<MediaStream | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [debugInfo, setDebugInfo] = useState('waiting...');
@@ -53,6 +53,7 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
   const detectCountRef = useRef(0);
   const faceCountRef = useRef(0);
   const lastFaceDetectedRef = useRef(false);
+  const lastDetectErrorRef = useRef<string>('');
 
   // MediaPipe 초기화
   useEffect(() => {
@@ -75,6 +76,7 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
           runningMode: "VIDEO",
           numFaces: 1,
           minFaceDetectionConfidence: 0.3,
+          minFacePresenceConfidence: 0.3,
           minTrackingConfidence: 0.3,
         });
 
@@ -166,8 +168,9 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
 
       // 30프레임마다 디버그 정보 갱신 (항상 표시)
       if (frameCountRef.current % 30 === 0) {
+        const errStr = lastDetectErrorRef.current ? ` ERR:${lastDetectErrorRef.current.slice(0, 40)}` : '';
         setDebugInfo(
-          `ready:${readyState} model:${hasModel} video:${vw}x${vh} frames:${frameCountRef.current} detects:${detectCountRef.current} faces:${faceCountRef.current}`
+          `ready:${readyState} model:${hasModel} video:${vw}x${vh} frames:${frameCountRef.current} detects:${detectCountRef.current} faces:${faceCountRef.current}${errStr}`
         );
       }
 
@@ -188,13 +191,7 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
           // 프레임 카운터 (900으로 순환 — 30fps 기준 30초 주기)
           frameCountRef.current = (frameCountRef.current + 1) % 900;
 
-          // 새 비디오 프레임에서만 감지 — 같은 프레임 중복 호출 시 MediaPipe ROI 상태 교란 방지
-          const isNewFrame = video.currentTime !== lastVideoTimeRef.current;
-          if (isNewFrame) {
-            lastVideoTimeRef.current = video.currentTime;
-          }
-
-          if (hasModel && isNewFrame) {
+          if (hasModel) {
             try {
               const results = faceLandmarkerRef.current!.detectForVideo(video, performance.now());
               detectCountRef.current++;
@@ -273,7 +270,8 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
                 }
               }
             } catch (detectError) {
-              // 감지 오류가 루프를 중단하지 않도록 처리
+              const msg = detectError instanceof Error ? detectError.message : String(detectError);
+              lastDetectErrorRef.current = msg;
               if (frameCountRef.current % 60 === 0) {
                 console.error("Detection error:", detectError);
               }
