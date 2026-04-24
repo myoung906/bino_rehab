@@ -188,6 +188,21 @@ export const mmToPrismDiopter = (mm: number, viewingDistanceCm: number = 50): nu
 };
 
 /**
+ * 원거리 IPD에서 주시거리 IPD로 보정
+ * 공식: IPD(주시거리) = IPD(원거리) × ((주시거리-12)/(주시거리+13))
+ * 원거리 기준: 6m (600cm) 이상
+ */
+export const adjustIPDByDistance = (ipdMm: number, viewingDistanceCm: number): number => {
+    // 원거리 (600cm+)에서는 그대로 반환
+    if (viewingDistanceCm >= 600) {
+        return ipdMm;
+    }
+    // 표준 공식 적용
+    const adjusted = ipdMm * ((viewingDistanceCm - 12) / (viewingDistanceCm + 13));
+    return parseFloat(adjusted.toFixed(1));
+};
+
+/**
  * 분석 샘플 배열로부터 임상 지표를 계산하는 순수 함수
  */
 export const computeClinicalMetrics = (

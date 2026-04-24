@@ -1,0 +1,74 @@
+name: Build Mobile (iOS)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install CocoaPods
+        run: sudo gem install cocoapods
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web
+        run: cd web && npm run build:standalone && cd ..
+
+      - name: Setup Capacitor
+        run: cd mobile && npm install
+
+      - name: Sync Capacitor
+        run: cd mobile && npx cap sync ios
+
+      - name: Install iOS pods
+        run: cd mobile/ios/App && pod install --repo-update
+
+      - name: Build iOS (debug)
+        run: |
+          cd mobile/ios/App
+          xcodebuild -workspace App.xcworkspace \
+            -scheme App \
+            -configuration Debug \
+            -derivedDataPath build \
+            -arch arm64 \
+            build-for-testing
+
+      - name: Create IPA (debug)
+        run: |
+          cd mobile/ios/App
+          xcodebuild -workspace App.xcworkspace \
+            -scheme App \
+            -configuration Debug \
+            -derivedDataPath build \
+            -arch arm64 \
+            -exportOptionsPlist ExportOptions.plist \
+            archive -archivePath build/App.xcarchive
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa
+          path: mobile/ios/App/build/App.xcarchive
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: mobile/ios/App/build/App.xcarchive/**
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

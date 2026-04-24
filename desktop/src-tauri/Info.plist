@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSCameraUsageDescription</key>
+  <string>Eye tracking analysis requires camera access to track eye movements and analyze binocular vision rehabilitation.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Camera access may request microphone permission, though it is not used by this app.</string>
+</dict>
+</plist>

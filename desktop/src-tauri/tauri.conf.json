@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "identifier": "com.binorehab.desktop",
   "build": {
-    "frontendDist": "../../web/out",
+    "frontendDist": "/Users/jmseo/Documents/workspace/bino_rehab/web/out",
     "beforeDevCommand": "cd ../web && npm run dev",
     "beforeBuildCommand": "cd ../web && BUILD_TARGET=standalone npm run build"
   },
@@ -20,12 +20,13 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com; worker-src 'self' blob:"
+      "csp": null
     }
   },
   "bundle": {
     "active": true,
     "targets": [
+      "dmg",
       "msi",
       "nsis"
     ],

@@ -77,10 +77,19 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
     let ignore = false;
     const initMediaPipe = async () => {
       try {
-        const vision = await FilesetResolver.forVisionTasks(
+        setDebugInfo('Loading WASM...');
+
+        // timeout 추가 (30초)
+        const visionPromise = FilesetResolver.forVisionTasks(
           "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm"
         );
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('WASM load timeout after 30s')), 30000)
+        );
+        const vision = await Promise.race([visionPromise, timeoutPromise]) as Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>>;
+
         if (ignore) return;
+        setDebugInfo('Loading model...');
 
         // MediaPipe 전용 오프스크린 캔버스 생성
         // CPU/GPU 모두 이미지 전처리에 WebGL(GLctx) 필요 — 드로잉 캔버스(2D ctx)와 분리 필수
@@ -90,9 +99,11 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
         mpCanvasRef.current = mpCanvas;
 
         let landmarker: FaceLandmarker;
+        let delegate: 'GPU' | 'CPU' = 'GPU';
         try {
           // GPU delegate 우선 (성능)
-          landmarker = await FaceLandmarker.createFromOptions(vision, {
+          setDebugInfo('Initializing GPU...');
+          const gpuPromise = FaceLandmarker.createFromOptions(vision, {
             baseOptions: {
               modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
               delegate: "GPU"
@@ -105,10 +116,16 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
             minFacePresenceConfidence: 0.3,
             minTrackingConfidence: 0.3,
           });
-        } catch {
+          const gpuTimeoutPromise = new Promise<FaceLandmarker>((_, reject) =>
+            setTimeout(() => reject(new Error('GPU init timeout after 30s')), 30000)
+          );
+          landmarker = await Promise.race([gpuPromise, gpuTimeoutPromise]);
+        } catch (gpuError) {
           if (ignore) return;
           // GPU 실패 시 CPU fallback — 동일 캔버스 재사용
-          landmarker = await FaceLandmarker.createFromOptions(vision, {
+          setDebugInfo('GPU failed, using CPU...');
+          delegate = 'CPU';
+          const cpuPromise = FaceLandmarker.createFromOptions(vision, {
             baseOptions: {
               modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
               delegate: "CPU"
@@ -121,15 +138,22 @@ const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
             minFacePresenceConfidence: 0.3,
             minTrackingConfidence: 0.3,
           });
+          const cpuTimeoutPromise = new Promise<FaceLandmarker>((_, reject) =>
+            setTimeout(() => reject(new Error('CPU init timeout after 30s')), 30000)
+          );
+          landmarker = await Promise.race([cpuPromise, cpuTimeoutPromise]);
         }
 
         if (ignore) { landmarker.close(); return; }
         faceLandmarkerRef.current = landmarker;
         setIsReady(true);
+        setDebugInfo(`Ready (${delegate})`);
         setErrorMsg(null);
       } catch (error: unknown) {
         if (!ignore) {
-          setErrorMsg(error instanceof Error ? error.message : "Failed to load AI Model.");
+          const msg = error instanceof Error ? error.message : "Failed to load AI Model.";
+          setErrorMsg(msg);
+          setDebugInfo(`Error: ${msg}`);
         }
       }
     };

@@ -4,6 +4,7 @@ import React, { memo } from 'react';
 import VideoAnalyzer from "@/components/VideoAnalyzer";
 import { useBinocularLogic } from "@/hooks/useBinocularLogic";
 import { useAnalysisStore } from "@/hooks/useAnalysisStore";
+import { adjustIPDByDistance } from "@/utils/clinicalCalculations";
 import { LineChart, Line, YAxis, ResponsiveContainer } from 'recharts';
 
 const MetricRow = ({ label, value, unit, color = "text-cyan-400" }: {
@@ -105,6 +106,13 @@ ClinicalPanel.displayName = 'ClinicalPanel';
 const CalibrationPanel = memo(() => {
   const calibration = useAnalysisStore((s) => s.calibration);
   if (calibration.pixelToMm === 0) return null;
+
+  // 거리 기반 IPD 보정
+  const adjustedIPD = adjustIPDByDistance(calibration.ipdMm, calibration.distanceCm);
+  const ipdDisplay = calibration.distanceCm < 600
+    ? `${adjustedIPD.toFixed(1)} (${calibration.ipdMm.toFixed(1)})`  // 주시거리 IPD (원거리 IPD)
+    : `${adjustedIPD.toFixed(1)}`;  // 원거리는 단일 표시
+
   return (
     <div className="glass-panel p-3 rounded-xl">
       <h2 className="text-xs font-semibold mb-2 text-slate-300 uppercase tracking-wider">
@@ -113,7 +121,7 @@ const CalibrationPanel = memo(() => {
       <div className="divide-y divide-slate-700/50">
         <MetricRow label="PX→mm 계수" value={calibration.pixelToMm.toFixed(3)} />
         <MetricRow label="추정 거리" value={calibration.distanceCm.toFixed(0)} unit="cm" />
-        <MetricRow label="IPD" value={calibration.ipdMm.toFixed(1)} unit="mm" />
+        <MetricRow label="IPD" value={ipdDisplay} unit="mm" />
       </div>
     </div>
   );

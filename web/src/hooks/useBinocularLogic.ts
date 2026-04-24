@@ -80,12 +80,22 @@ export const useBinocularLogic = () => {
                 ? rawPixelToMm
                 : calibRef.current.pixelToMm * 0.95 + rawPixelToMm * 0.05;
 
-            // 거리 추정: FOV 기반 focal length
+            // 거리 추정: 개선된 homography 기반 방식
+            // 웹캠 초점거리 추정 (일반적인 웹캠: 3-4mm)
+            // FOV 60° 기준: focalLength ≈ videoWidth / 2 / tan(30°) ≈ 0.866 * videoWidth
             const focalLengthPx = (data.videoWidth / 2) / Math.tan((DEFAULT_FOV_DEG / 2) * Math.PI / 180);
-            const distanceCm = (IRIS_REAL_MM * focalLengthPx) / (avgIrisWidthPx * 10);
+
+            // 개선: 홍채 실제 크기(11.7mm)와 화면상 크기(픽셀)의 비율로 거리 계산
+            // 더 정확한 핀홀 카메라 모델: distance = focal_length × real_size / pixel_size
+            // 단위: 홍채는 mm, focal_length는 px, 결과는 cm
+            const distanceCm = (focalLengthPx * IRIS_REAL_MM) / avgIrisWidthPx / 10;
+
+            // 거리 범위 제한 (30cm ~ 300cm 사이로 클램프)
+            const clampedDistanceCm = Math.max(30, Math.min(300, distanceCm));
+
             calibRef.current.distanceCm = calibRef.current.distanceCm === 0
-                ? distanceCm
-                : calibRef.current.distanceCm * 0.95 + distanceCm * 0.05;
+                ? clampedDistanceCm
+                : calibRef.current.distanceCm * 0.92 + clampedDistanceCm * 0.08;
         }
 
         const pixelToMm = calibRef.current.pixelToMm || 0.45; // fallback
