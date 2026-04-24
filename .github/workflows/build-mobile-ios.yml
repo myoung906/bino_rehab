@@ -21,11 +21,11 @@ jobs:
       - name: Install CocoaPods
         run: sudo gem install cocoapods
 
-      - name: Install dependencies
-        run: npm install
+      - name: Install web dependencies
+        run: cd web && npm install
 
       - name: Build web
-        run: cd web && npm run build:standalone && cd ..
+        run: cd web && npm run build:standalone
 
       - name: Setup Capacitor
         run: cd mobile && npm install

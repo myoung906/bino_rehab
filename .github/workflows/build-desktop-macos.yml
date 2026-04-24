@@ -26,11 +26,14 @@ jobs:
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
-      - name: Install dependencies
-        run: npm install
+      - name: Install web dependencies
+        run: cd web && npm install
 
       - name: Build web
-        run: cd web && npm run build:standalone && cd ..
+        run: cd web && npm run build:standalone
+
+      - name: Install Tauri dependencies
+        run: cd desktop && npm install
 
       - name: Build Tauri (macOS)
         run: cd desktop && npm run build
