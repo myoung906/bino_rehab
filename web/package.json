@@ -6,8 +6,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "build:gh-pages": "BUILD_TARGET=gh-pages next build",
-    "build:standalone": "BUILD_TARGET=standalone next build",
+    "build:gh-pages": "npx cross-env BUILD_TARGET=gh-pages next build",
+    "build:standalone": "npx cross-env BUILD_TARGET=standalone next build",
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
@@ -30,6 +30,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitest/coverage-v8": "^4.1.5",
+    "cross-env": "^7.0.3",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",

@@ -4,9 +4,9 @@
   "version": "1.0.0",
   "identifier": "com.binorehab.desktop",
   "build": {
-    "frontendDist": "/Users/jmseo/Documents/workspace/bino_rehab/web/out",
+    "frontendDist": "../../web/out",
     "beforeDevCommand": "cd ../web && npm run dev",
-    "beforeBuildCommand": "cd ../web && BUILD_TARGET=standalone npm run build"
+    "beforeBuildCommand": "cd ../web && npx cross-env BUILD_TARGET=standalone npm run build"
   },
   "app": {
     "windows": [
