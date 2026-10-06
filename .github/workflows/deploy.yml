@@ -2,7 +2,7 @@ name: Deploy v1 and v2 to GitHub Pages
 
 on:
   push:
-    branches: ["main", "v2"]
+    branches: ["main"]
   workflow_dispatch:
 
 permissions:
@@ -69,6 +69,7 @@ jobs:
           path: ./current/web/out
 
   deploy:
+    if: github.ref == 'refs/heads/main'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

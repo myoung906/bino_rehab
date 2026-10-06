@@ -10,6 +10,8 @@
 - 사용자가 README의 v2 링크 추가와 휴대폰 테스트를 요청하여 별도 경로 배포를 준비했다.
   GitHub Pages 워크플로는 `main`의 기존 앱을 루트에, `v2` 브랜치의 앱을 `/v2/`에 함께 배포한다.
   `main`에는 README 링크와 워크플로만 반영하며 v2 측정 코드는 `v2` 브랜치에 둔다.
+  Pages 공개는 기존 환경 정책에 맞춰 `main` 푸시 또는 `main`에서의 수동 실행으로 진행한다.
+  이후 v2 브랜치만 갱신할 경우 `main`의 배포 워크플로를 수동 실행하여 두 앱을 다시 배포한다.
 - v2 주소: `https://myoung906.github.io/bino_rehab/v2/`.
   빌드 시 `BUILD_BASE_PATH=/bino_rehab/v2`로 설정해 JS·CSS 등 자원도 해당 경로에서 로드한다.
 
