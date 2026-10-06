@@ -1,8 +1,8 @@
-name: Deploy to GitHub Pages
+name: Deploy v1 and v2 to GitHub Pages
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "v2"]
   workflow_dispatch:
 
 permissions:
@@ -18,31 +18,55 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout current app
         uses: actions/checkout@v4
+        with:
+          ref: main
+          path: current
+
+      - name: Checkout v2
+        uses: actions/checkout@v4
+        with:
+          ref: v2
+          path: preview
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: |
+            current/web/package-lock.json
+            preview/web/package-lock.json
 
-      - name: Install dependencies
+      - name: Build current app
+        working-directory: current/web
         run: |
-          cd web
           npm ci
+          npm run build -- --webpack
 
-      - name: Build
+      - name: Verify and build v2
+        working-directory: preview/web
+        env:
+          BUILD_TARGET: gh-pages
+          BUILD_BASE_PATH: /bino_rehab/v2
         run: |
-          cd web
-          npm run build
-          touch out/.nojekyll
+          npm ci
+          npx tsc --noEmit
+          npm run lint
+          npm test
+          npm run build -- --webpack
+
+      - name: Combine both apps
+        run: |
+          mkdir -p current/web/out/v2
+          cp -a preview/web/out/. current/web/out/v2/
+          touch current/web/out/.nojekyll
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./web/out
+          path: ./current/web/out
 
   deploy:
     environment:

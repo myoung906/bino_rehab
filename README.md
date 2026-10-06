@@ -1,6 +1,8 @@
 # 🚀 바로 테스트하기 (Live Demo)
 👉 [https://myoung906.github.io/bino_rehab](https://myoung906.github.io/bino_rehab)
 
+👉 [v2 — 휴대폰으로 테스트하기](https://myoung906.github.io/bino_rehab/v2/)
+
 ---
 
 # AGENTS.md - AI 에이전트 작업 지침서
