@@ -1,20 +1,9 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
-
 export const metadata: Metadata = {
-  title: "Binocular Vision Rehab",
-  description: "Advanced Eye Tracking & Vision Analysis System",
+  title: "Bino Rehab v2",
+  description: "카메라와 짧은 안내로 측정하는 양안 기능 스크리닝",
 };
 
 export default function RootLayout({
@@ -23,10 +12,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
+    <html lang="ko">
+      <body className="antialiased">
         {children}
       </body>
     </html>

@@ -5,7 +5,7 @@ const isProd = process.env.NODE_ENV === "production";
 
 const nextConfig: NextConfig = {
   output: "export",
-  basePath: buildTarget === 'gh-pages' && isProd ? "/bino_rehab" : "",
+  basePath: process.env.BUILD_BASE_PATH ?? (buildTarget === 'gh-pages' && isProd ? "/bino_rehab" : ""),
   images: {
     unoptimized: true,
   },

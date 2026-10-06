@@ -1,443 +1,167 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { Camera, RefreshCw } from 'lucide-react';
-import { FaceLandmarker, FilesetResolver, NormalizedLandmark } from "@mediapipe/tasks-vision";
-import clsx from 'clsx';
+import { useEffect, useRef, useState } from 'react';
+import { FaceLandmarker, FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
+import { extractTrackingFrame, missingFrame } from '@/utils/eyeTracking';
+import type { CaptureScope, TrackingFrame } from '@/utils/measurementTypes';
 
-// 얼굴 윤곽 랜드마크 인덱스 (36개) — 바운딩 박스용
-// 478개 전체 순회 대비 ~13배 반복 횟수 감소
-const FACE_OVAL_INDICES = [
-  10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
-  397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136,
-  172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109,
-] as const;
+export type TrackingData = TrackingFrame;
+interface Props { onFrame?: (frame: TrackingFrame) => void; showOverlay?: boolean }
 
-const getCentroid = (landmarks: NormalizedLandmark[], indices: readonly number[]) => {
-  let x = 0, y = 0, z = 0;
-  for (const idx of indices) {
-    x += landmarks[idx].x;
-    y += landmarks[idx].y;
-    z += landmarks[idx].z;
-  }
-  return { x: x / indices.length, y: y / indices.length, z: z / indices.length };
-};
-
-export interface TrackingData {
-  timestamp: number;
-  rightIris: { x: number; y: number; z: number };
-  leftIris: { x: number; y: number; z: number };
-  leftIrisWidth: number;   // |lm[469].x - lm[471].x| * videoWidth (홍채 수평 폭 px)
-  rightIrisWidth: number;  // |lm[474].x - lm[476].x| * videoWidth
-  leftPupilRadius: number; // iris 면적 proxy (irisWidth * irisHeight)
-  rightPupilRadius: number;
-  videoWidth: number;
-  videoHeight: number;
-}
-
-interface VideoAnalyzerProps {
-  onFrame?: (data: TrackingData) => void;
-  showOverlay?: boolean;
-}
-
-const VideoAnalyzer = ({ onFrame, showOverlay = true }: VideoAnalyzerProps) => {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [isReady, setIsReady] = useState(false);
-  const [cameraReady, setCameraReady] = useState(false);
-  const [deviceId, setDeviceId] = useState<string>('');
+export default function VideoAnalyzer({ onFrame, showOverlay = true }: Props) {
+  const video = useRef<HTMLVideoElement>(null);
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const source = useRef<HTMLCanvasElement | null>(null);
+  const stream = useRef<MediaStream | null>(null);
+  const face = useRef<FaceLandmarker | null>(null);
+  const hand = useRef<HandLandmarker | null>(null);
+  const callback = useRef(onFrame);
+  const [deviceId, setDeviceId] = useState('');
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
-  const faceLandmarkerRef = useRef<FaceLandmarker | null>(null);
-  const mpCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [error, setError] = useState('');
+  const [modelReady, setModelReady] = useState(false);
+  const [handReady, setHandReady] = useState(false);
+  const [cameraReady, setCameraReady] = useState(false);
+  const [detected, setDetected] = useState(false);
+  const [scope, setScope] = useState<CaptureScope | null>(null);
+  const [enabled, setEnabled] = useState(false);
+  useEffect(() => { callback.current = onFrame; }, [onFrame]);
 
-  const streamRef = useRef<MediaStream | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [debugInfo, setDebugInfo] = useState('waiting...');
-  const [faceDetected, setFaceDetected] = useState(false);
-  const frameCountRef = useRef(0);
-  const detectCountRef = useRef(0);
-  const faceCountRef = useRef(0);
-  const lastFaceDetectedRef = useRef(false);
-  const lastDetectErrorRef = useRef<string>('');
-
-  // MediaPipe WASM이 stderr로 출력하는 INFO 메시지를 Next.js dev overlay가
-  // console.error로 가로채 에러처럼 표시하는 문제 억제 (개발 환경 한정)
   useEffect(() => {
-    if (process.env.NODE_ENV !== 'development') return;
-    const orig = console.error.bind(console);
-    console.error = (...args: unknown[]) => {
-      if (typeof args[0] === 'string' && args[0].startsWith('INFO:')) return;
-      orig(...args);
-    };
-    return () => { console.error = orig; };
-  }, []);
-
-  // MediaPipe 초기화
-  useEffect(() => {
-    let ignore = false;
-    const initMediaPipe = async () => {
+    if (!enabled) return;
+    let cancelled = false;
+    const init = async () => {
       try {
-        setDebugInfo('Loading WASM...');
-
-        // timeout 추가 (30초)
-        const visionPromise = FilesetResolver.forVisionTasks(
-          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm"
-        );
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('WASM load timeout after 30s')), 30000)
-        );
-        const vision = await Promise.race([visionPromise, timeoutPromise]) as Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>>;
-
-        if (ignore) return;
-        setDebugInfo('Loading model...');
-
-        // MediaPipe 전용 오프스크린 캔버스 생성
-        // CPU/GPU 모두 이미지 전처리에 WebGL(GLctx) 필요 — 드로잉 캔버스(2D ctx)와 분리 필수
-        const mpCanvas = document.createElement('canvas');
-        mpCanvas.width = 1280;
-        mpCanvas.height = 720;
-        mpCanvasRef.current = mpCanvas;
-
-        let landmarker: FaceLandmarker;
-        let delegate: 'GPU' | 'CPU' = 'GPU';
+        const vision = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.32/wasm');
+        const faceModel = await FaceLandmarker.createFromOptions(vision, {
+          baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task', delegate: 'CPU' },
+          runningMode: 'VIDEO', numFaces: 1,
+          minFaceDetectionConfidence: .6, minFacePresenceConfidence: .6, minTrackingConfidence: .6,
+        });
+        if (cancelled) { faceModel.close(); return; }
+        face.current = faceModel; setModelReady(true);
         try {
-          // GPU delegate 우선 (성능)
-          setDebugInfo('Initializing GPU...');
-          const gpuPromise = FaceLandmarker.createFromOptions(vision, {
-            baseOptions: {
-              modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
-              delegate: "GPU"
-            },
-            canvas: mpCanvas,
-            outputFaceBlendshapes: false,
-            runningMode: "VIDEO",
-            numFaces: 1,
-            minFaceDetectionConfidence: 0.3,
-            minFacePresenceConfidence: 0.3,
-            minTrackingConfidence: 0.3,
+          const handModel = await HandLandmarker.createFromOptions(vision, {
+            baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task', delegate: 'CPU' },
+            runningMode: 'VIDEO', numHands: 2, minHandDetectionConfidence: .6, minHandPresenceConfidence: .6, minTrackingConfidence: .6,
           });
-          const gpuTimeoutPromise = new Promise<FaceLandmarker>((_, reject) =>
-            setTimeout(() => reject(new Error('GPU init timeout after 30s')), 30000)
-          );
-          landmarker = await Promise.race([gpuPromise, gpuTimeoutPromise]);
-        } catch (gpuError) {
-          if (ignore) return;
-          // GPU 실패 시 CPU fallback — 동일 캔버스 재사용
-          setDebugInfo('GPU failed, using CPU...');
-          delegate = 'CPU';
-          const cpuPromise = FaceLandmarker.createFromOptions(vision, {
-            baseOptions: {
-              modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
-              delegate: "CPU"
-            },
-            canvas: mpCanvas,
-            outputFaceBlendshapes: false,
-            runningMode: "VIDEO",
-            numFaces: 1,
-            minFaceDetectionConfidence: 0.3,
-            minFacePresenceConfidence: 0.3,
-            minTrackingConfidence: 0.3,
-          });
-          const cpuTimeoutPromise = new Promise<FaceLandmarker>((_, reject) =>
-            setTimeout(() => reject(new Error('CPU init timeout after 30s')), 30000)
-          );
-          landmarker = await Promise.race([cpuPromise, cpuTimeoutPromise]);
-        }
-
-        if (ignore) { landmarker.close(); return; }
-        faceLandmarkerRef.current = landmarker;
-        setIsReady(true);
-        setDebugInfo(`Ready (${delegate})`);
-        setErrorMsg(null);
-      } catch (error: unknown) {
-        if (!ignore) {
-          const msg = error instanceof Error ? error.message : "Failed to load AI Model.";
-          setErrorMsg(msg);
-          setDebugInfo(`Error: ${msg}`);
-        }
-      }
-    };
-    initMediaPipe();
-    return () => {
-      ignore = true;
-      if (faceLandmarkerRef.current) {
-        faceLandmarkerRef.current.close();
-        faceLandmarkerRef.current = null;
-      }
-      mpCanvasRef.current = null;
-    };
-  }, []);
-
-  // 카메라 시작
-  const startCamera = useCallback(async (selectedDeviceId?: string) => {
-    try {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-      }
-      const constraints: MediaStreamConstraints = {
-        video: {
-          ...(selectedDeviceId ? { deviceId: { exact: selectedDeviceId } } : {}),
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 30 },
-        },
-        audio: false,
-      };
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      streamRef.current = stream;
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-        setCameraReady(true);
-        setErrorMsg(null);
-      }
-
-      const mediaDevices = await navigator.mediaDevices.enumerateDevices();
-      const videoDevices = mediaDevices.filter(({ kind }) => kind === "videoinput");
-      setDevices(videoDevices);
-      if (!selectedDeviceId && videoDevices.length > 0) {
-        setDeviceId(videoDevices[0].deviceId);
-      }
-    } catch (err: unknown) {
-      setErrorMsg(err instanceof Error ? err.message : "Camera access failed");
-    }
-  }, []);
-
-  useEffect(() => {
-    startCamera();
-    return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-      }
-    };
-  }, [startCamera]);
-
-  const handleDeviceChange = useCallback((newDeviceId: string) => {
-    setDeviceId(newDeviceId);
-    startCamera(newDeviceId);
-  }, [startCamera]);
-
-  // 메인 렌더 루프
-  const runLoop = useCallback(() => {
-    try {
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-
-      if (!video || !canvas) {
-        requestAnimationFrame(runLoop);
-        return;
-      }
-
-      const readyState = video.readyState;
-      const hasModel = !!faceLandmarkerRef.current;
-      const vw = video.videoWidth;
-      const vh = video.videoHeight;
-
-      // 30프레임마다 디버그 정보 갱신 (항상 표시)
-      if (frameCountRef.current % 30 === 0) {
-        const errStr = lastDetectErrorRef.current ? ` ERR:${lastDetectErrorRef.current.slice(0, 40)}` : '';
-        setDebugInfo(
-          `ready:${readyState} model:${hasModel} video:${vw}x${vh} frames:${frameCountRef.current} detects:${detectCountRef.current} faces:${faceCountRef.current}${errStr}`
-        );
-      }
-
-      if (readyState >= 2 && vw > 0 && vh > 0) {
-        if (canvas.width !== vw || canvas.height !== vh) {
-          canvas.width = vw;
-          canvas.height = vh;
-        }
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          // 미러링된 비디오 프레임 그리기
-          ctx.save();
-          ctx.translate(vw, 0);
-          ctx.scale(-1, 1);
-          ctx.drawImage(video, 0, 0, vw, vh);
-          ctx.restore();
-
-          // 프레임 카운터 (900으로 순환 — 30fps 기준 30초 주기)
-          frameCountRef.current = (frameCountRef.current + 1) % 900;
-
-          if (hasModel) {
-            try {
-              const results = faceLandmarkerRef.current!.detectForVideo(video, performance.now());
-              detectCountRef.current++;
-
-              const nowDetected = results.faceLandmarks && results.faceLandmarks.length > 0;
-              if (nowDetected !== lastFaceDetectedRef.current) {
-                lastFaceDetectedRef.current = nowDetected;
-                setFaceDetected(nowDetected);
-              }
-
-              if (nowDetected) {
-                faceCountRef.current++;
-                const landmarks = results.faceLandmarks[0];
-
-                const rightIrisIndices = [474, 475, 476, 477] as const;
-                const leftIrisIndices = [469, 470, 471, 472] as const;
-                const rightIrisCenter = getCentroid(landmarks, rightIrisIndices);
-                const leftIrisCenter = getCentroid(landmarks, leftIrisIndices);
-
-                if (showOverlay) {
-                  ctx.save();
-                  ctx.translate(vw, 0);
-                  ctx.scale(-1, 1);
-
-                  // 얼굴 바운딩 박스 — FACE_OVAL_INDICES(36개)만 순회 (478개 전체 대비 13배 빠름)
-                  let minX = 1, minY = 1, maxX = 0, maxY = 0;
-                  for (const idx of FACE_OVAL_INDICES) {
-                    const lm = landmarks[idx];
-                    if (lm.x < minX) minX = lm.x;
-                    if (lm.y < minY) minY = lm.y;
-                    if (lm.x > maxX) maxX = lm.x;
-                    if (lm.y > maxY) maxY = lm.y;
-                  }
-                  ctx.strokeStyle = '#22c55e';
-                  ctx.lineWidth = 3;
-                  ctx.strokeRect(minX * vw, minY * vh, (maxX - minX) * vw, (maxY - minY) * vh);
-
-                  // 홍채 중심점 마커
-                  ctx.fillStyle = '#06b6d4';
-                  ctx.beginPath();
-                  ctx.arc(rightIrisCenter.x * vw, rightIrisCenter.y * vh, 5, 0, 2 * Math.PI);
-                  ctx.fill();
-
-                  ctx.fillStyle = '#8b5cf6';
-                  ctx.beginPath();
-                  ctx.arc(leftIrisCenter.x * vw, leftIrisCenter.y * vh, 5, 0, 2 * Math.PI);
-                  ctx.fill();
-
-                  // 홍채 윤곽선
-                  const drawIrisConnector = (indices: readonly number[], color: string) => {
-                    ctx.strokeStyle = color;
-                    ctx.lineWidth = 1;
-                    ctx.beginPath();
-                    indices.forEach((idx, i) => {
-                      const lm = landmarks[idx];
-                      if (i === 0) ctx.moveTo(lm.x * vw, lm.y * vh);
-                      else ctx.lineTo(lm.x * vw, lm.y * vh);
-                    });
-                    ctx.closePath();
-                    ctx.stroke();
-                  };
-                  drawIrisConnector(rightIrisIndices, "rgba(6,182,212,0.5)");
-                  drawIrisConnector(leftIrisIndices, "rgba(139,92,246,0.5)");
-
-                  ctx.restore();
-                }
-
-                if (onFrame) {
-                  // 홍채 수평/수직 폭 (px)
-                  const leftIrisWidth = Math.abs(landmarks[469].x - landmarks[471].x) * vw;
-                  const rightIrisWidth = Math.abs(landmarks[474].x - landmarks[476].x) * vw;
-                  // 동공 크기 proxy: iris 타원 면적 ≈ width * height
-                  const leftIrisHeight = Math.abs(landmarks[470].y - landmarks[472].y) * vh;
-                  const rightIrisHeight = Math.abs(landmarks[475].y - landmarks[477].y) * vh;
-                  const leftPupilRadius = leftIrisWidth * leftIrisHeight;
-                  const rightPupilRadius = rightIrisWidth * rightIrisHeight;
-
-                  onFrame({
-                    timestamp: performance.now(),
-                    rightIris: rightIrisCenter,
-                    leftIris: leftIrisCenter,
-                    leftIrisWidth,
-                    rightIrisWidth,
-                    leftPupilRadius,
-                    rightPupilRadius,
-                    videoWidth: vw,
-                    videoHeight: vh
-                  });
-                }
-              }
-            } catch (detectError) {
-              const msg = detectError instanceof Error ? detectError.message : String(detectError);
-              lastDetectErrorRef.current = msg;
-              if (frameCountRef.current % 60 === 0) {
-                console.error("Detection error:", detectError);
-              }
-            }
+          if (cancelled) { handModel.close(); return; }
+          hand.current = handModel; setHandReady(true);
+        } catch {
+          if (!cancelled) {
+            setHandReady(false);
+            setError('손 차폐 추적을 불러오지 못했습니다. 연결을 확인한 뒤 카메라를 껐다 켜주세요.');
           }
         }
+      } catch {
+        if (!cancelled) setError('눈 추적 모델을 불러오지 못했습니다. 연결을 확인한 뒤 카메라를 다시 켜주세요.');
       }
-    } catch (loopError) {
-      console.error("Loop error:", loopError);
-    }
-
-    requestAnimationFrame(runLoop);
-  }, [onFrame, showOverlay]);
+    };
+    void init();
+    return () => {
+      cancelled = true; face.current?.close(); hand.current?.close();
+      face.current = null; hand.current = null;
+    };
+  }, [enabled]);
 
   useEffect(() => {
-    const animationId = requestAnimationFrame(runLoop);
-    return () => cancelAnimationFrame(animationId);
-  }, [runLoop]);
+    if (!enabled) return;
+    let cancelled = false;
+    let owned: MediaStream | null = null;
+    const start = async () => {
+      try {
+        const next = await navigator.mediaDevices.getUserMedia({
+          video: {
+            ...(deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: 'user' } }),
+            width: { ideal: 1280 }, height: { ideal: 960 }, aspectRatio: { ideal: 4 / 3 }, frameRate: { ideal: 30 },
+          }, audio: false,
+        });
+        owned = next;
+        if (cancelled) { next.getTracks().forEach(t => t.stop()); return; }
+        stream.current = next;
+        if (video.current) {
+          video.current.srcObject = next; await video.current.play();
+        }
+        if (cancelled) return;
+        const settings = next.getVideoTracks()[0].getSettings() as MediaTrackSettings & { zoom?: number };
+        setScope({ width: video.current?.videoWidth || settings.width || 0,
+          height: video.current?.videoHeight || settings.height || 0,
+          deviceId: settings.deviceId || '', facingMode: settings.facingMode || '', zoom: settings.zoom ?? null });
+        setDevices((await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput'));
+        setCameraReady(true);
+      } catch {
+        if (!cancelled) setError('전면카메라 접근을 허용해주세요.');
+      }
+    };
+    void start();
+    return () => { cancelled = true; owned?.getTracks().forEach(t => t.stop()); };
+  }, [enabled, deviceId]);
 
-  return (
-    <div className="relative w-full h-full rounded-2xl overflow-hidden glass-panel shadow-2xl border border-slate-700 flex items-center justify-center bg-black">
-      {(!isReady || !cameraReady || errorMsg) && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900 z-10 gap-4">
-          {errorMsg ? (
-            <>
-              <div className="text-red-500 font-bold">
-                {isReady ? "Camera Error" : "Error Loading AI"}
-              </div>
-              <div className="text-red-400 text-xs px-4 text-center max-w-sm">{errorMsg}</div>
-              <div className="text-slate-400 text-sm px-4 text-center max-w-sm mt-2">
-                Check: System Settings &gt; Privacy &amp; Security &gt; Camera
-              </div>
-              <button onClick={() => window.location.reload()} className="mt-4 px-4 py-2 bg-slate-800 text-white rounded hover:bg-slate-700 transition">Retry</button>
-            </>
-          ) : (
-            <>
-              <RefreshCw className="w-10 h-10 text-cyan-500 animate-spin" />
-              <p className="text-cyan-400 font-mono text-sm">
-                {!cameraReady ? "Connecting Camera..." : "Loading AI Models..."}
-              </p>
-            </>
-          )}
-        </div>
-      )}
-      {/* Video: 뒤에서 프레임 디코딩 유지 */}
-      <video
-        ref={videoRef}
-        playsInline
-        muted
-        autoPlay
-        style={{ position: 'absolute', zIndex: 0, width: '100%', height: '100%', objectFit: 'contain' }}
-      />
-      {/* Canvas: 미러링된 비디오 프레임 + 오버레이 */}
-      <canvas ref={canvasRef} style={{ position: 'absolute', zIndex: 1, width: '100%', height: '100%', objectFit: 'contain' }} />
-      {/* 디버그 정보 바 — 항상 표시 */}
-      <div className="absolute top-1 md:top-2 left-1 md:left-2 right-1 md:right-2 z-30 text-[9px] md:text-xs font-mono text-yellow-400 bg-black/80 px-2 md:px-3 py-1 md:py-2 rounded overflow-x-auto whitespace-nowrap">
-        {debugInfo}
-      </div>
-      {/* 얼굴 미감지 안내 오버레이 */}
-      {isReady && cameraReady && !faceDetected && !errorMsg && (
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 text-center pointer-events-none px-2">
-          <div className="text-slate-400 text-xs md:text-sm font-mono bg-black/50 px-2 md:px-3 py-1.5 md:py-2 rounded-lg">
-            얼굴을 카메라 정면에 위치시켜 주세요
-          </div>
-        </div>
-      )}
-      <div className="absolute bottom-2 md:bottom-4 left-2 md:left-4 right-2 md:right-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 glass-panel p-2 md:p-3 rounded-xl z-20">
-        <div className="flex items-center gap-1.5 md:gap-2 w-full sm:w-auto">
-          <Camera className="w-4 h-4 md:w-5 md:h-5 text-cyan-400 flex-shrink-0" />
-          <select className="bg-transparent text-xs md:text-sm text-slate-200 focus:outline-none cursor-pointer max-w-[120px] sm:max-w-[150px] truncate flex-1 sm:flex-initial" value={deviceId} onChange={(e) => handleDeviceChange(e.target.value)}>
-            {devices.map((device, key) => (<option key={key} value={device.deviceId} className="bg-slate-800">{device.label || `Camera ${key + 1}`}</option>))}
-          </select>
-        </div>
-        <div className="flex gap-1.5 md:gap-2 items-center">
-          <div className={clsx("w-2.5 h-2.5 md:w-3 md:h-3 rounded-full transition-colors", isReady && cameraReady ? "bg-green-500 animate-pulse" : "bg-yellow-500")} title="System Status"></div>
-          <span className="text-[10px] md:text-xs text-slate-400">{isReady && cameraReady ? "Ready" : "Initializing"}</span>
-          {isReady && cameraReady && (
-            <span className="text-[10px] md:text-xs font-mono text-slate-500">
-              {faceDetected ? '👁 감지됨' : '— 대기중'}
-            </span>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-};
+  useEffect(() => {
+    if (!enabled || !modelReady || !cameraReady || !scope) return;
+    let animation = 0, stopped = false, lastVideoTime = -1, lastRun = -1;
+    source.current = document.createElement('canvas');
+    const run = () => {
+      if (stopped) return;
+      const v = video.current, out = canvas.current, input = source.current;
+      const now = performance.now();
+      if (v && out && input && v.readyState >= 2 && v.currentTime !== lastVideoTime && now - lastRun >= 30) {
+        lastVideoTime = v.currentTime; lastRun = now;
+        const width = v.videoWidth, height = v.videoHeight;
+        if (input.width !== width || input.height !== height) { input.width = width; input.height = height; }
+        if (out.width !== width || out.height !== height) { out.width = width; out.height = height; }
+        const ctx = input.getContext('2d', { willReadFrequently: true }), display = out.getContext('2d');
+        const settings = stream.current?.getVideoTracks()[0]?.getSettings() as (MediaTrackSettings & { zoom?: number }) | undefined;
+        const currentScope = { ...scope, width, height, zoom: settings?.zoom ?? null };
+        if (ctx && display) {
+          ctx.drawImage(v, 0, 0, width, height);
+          let frame = missingFrame(currentScope, now, !!hand.current);
+          try {
+            const hands = hand.current?.detectForVideo(v, now).landmarks || [];
+            const results = face.current?.detectForVideo(v, now);
+            if (results?.faceLandmarks[0]?.length === 478) {
+              frame = extractTrackingFrame(results.faceLandmarks[0], hands, ctx, currentScope, now, !!hand.current);
+            }
+          } catch {
+            // 추적 오류도 프레임으로 전달하여 오래된 관측값이 검사 종료점이 되지 않도록 한다.
+          }
+          callback.current?.(frame);
+          setDetected(frame.facePresent);
+          display.save(); display.translate(width, 0); display.scale(-1, 1);
+          display.drawImage(input, 0, 0);
+          if (showOverlay) for (const eye of [frame.eyes.right, frame.eyes.left]) {
+            if (!frame.facePresent) continue;
+            display.strokeStyle = eye.valid ? '#22d3ee' : '#fbbf24';
+            display.lineWidth = 2; display.beginPath();
+            const point = eye.pupil || eye.iris;
+            display.arc(point.x, point.y, 4, 0, 2 * Math.PI); display.stroke();
+          }
+          display.restore();
+        }
+      }
+      animation = requestAnimationFrame(run);
+    };
+    animation = requestAnimationFrame(run);
+    return () => { stopped = true; cancelAnimationFrame(animation); source.current = null; };
+  }, [enabled, cameraReady, modelReady, scope, showOverlay]);
 
-export default VideoAnalyzer;
+  return <div className="relative h-full min-h-52 overflow-hidden rounded-2xl border border-slate-700 bg-black">
+    <video ref={video} playsInline muted autoPlay className="absolute inset-0 h-full w-full object-contain" style={{ transform: 'scaleX(-1)' }} />
+    <canvas ref={canvas} className="absolute inset-0 h-full w-full object-contain" />
+    {!enabled ? <div className="absolute inset-0 grid place-content-center gap-3 text-center">
+      <p className="text-sm text-slate-300">휴대폰을 눈높이 정면에 놓아주세요.</p>
+      <button className="glass-button rounded-xl px-6 py-3" onClick={() => { setError(''); setEnabled(true); }}>전면카메라 켜기</button>
+    </div> : <div className="absolute inset-x-3 bottom-3 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-950/85 p-3 text-xs">
+      <span>{error || (!modelReady || !cameraReady ? '카메라와 눈 추적을 준비하고 있습니다…' : detected ? '청록색 원: 판독한 동공 후보 / 노란색: 판독 대기' : '얼굴을 정면에 맞춰주세요.')}</span>
+      {cameraReady && <select aria-label="카메라 선택" className="max-w-40 rounded bg-slate-800 p-1" value={deviceId || scope?.deviceId || ''}
+        onChange={e => { setError(''); setCameraReady(false); setDeviceId(e.target.value); }}>
+        {devices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.label || '카메라'}</option>)}
+      </select>}
+      <button onClick={() => {
+        if (scope) callback.current?.(missingFrame(scope, performance.now(), false));
+        setEnabled(false); setModelReady(false); setHandReady(false); setCameraReady(false); setScope(null); setDetected(false);
+      }}>카메라 끄기</button>
+      {modelReady && !handReady && <span className="text-amber-300">손 차폐 추적 준비 중 — 완료 후 차폐검사를 시작하세요.</span>}
+    </div>}
+  </div>;
+}

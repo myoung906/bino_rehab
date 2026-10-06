@@ -1,5 +1,11 @@
+# Bino Rehab v2 개발 브랜치
+
+이 브랜치는 배포 중인 `main`을 바탕으로 측정 파이프라인을 변경하는 v2 작업본입니다. 구현 범위와 보정 조건은 [v2 구현 문서](docs/v2-implementation.md)를 참조하세요.
+
 # 🚀 바로 테스트하기 (Live Demo)
 👉 [https://myoung906.github.io/bino_rehab](https://myoung906.github.io/bino_rehab)
+
+👉 [v2 — 휴대폰으로 테스트하기](https://myoung906.github.io/bino_rehab/v2/)
 
 ---
 

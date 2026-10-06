@@ -1,280 +1,98 @@
-import { ClinicalMetrics } from '@/hooks/useAnalysisStore';
+import type { ClinicalMetrics } from '@/hooks/useAnalysisStore';
+import { isPositive } from './calibration';
+import type { CoverTrial, Measurement, ScreeningResults, ScreeningSession } from './measurementTypes';
 
+// 구형 녹화의 타입 호환만 유지한다. 자유 녹화에서 임상 수치를 추측하지 않는다.
 export interface AnalysisSample {
-    t: number;
-    pdMm: number;
-    velocityMmS: number;
-    symmetry: number;
-    leftX: number;
-    rightX: number;
-    pupilProxy: number;      // iris 면적 proxy (동공 크기 간접 지표)
-    pixelToMm: number;       // 해당 프레임의 보정 계수
-    distanceCm: number;      // 해당 프레임의 거리 추정값
+  t: number; pdMm: number; velocityMmS: number; symmetry: number; leftX: number; rightX: number;
+  pupilProxy?: number; pixelToMm?: number; distanceCm?: number;
 }
+const round = (n: number): number => Math.round(n * 10) / 10;
+export const angleToPrismDiopter = (degree: number): number => 100 * Math.tan(degree * Math.PI / 180);
 
-// --- 유틸 ---
-
-const mean = (arr: number[]): number =>
-    arr.length === 0 ? 0 : arr.reduce((a, b) => a + b, 0) / arr.length;
-
-const round1 = (v: number): number => parseFloat(v.toFixed(1));
-
-// --- Break/Recovery 감지 ---
-
-interface BreakRecovery {
-    convergenceBreakPd: number | null;   // PRC break (Δ)
-    convergenceRecoveryPd: number | null;
-    divergenceBreakPd: number | null;    // NRC break (Δ)
-    divergenceRecoveryPd: number | null;
-}
-
-/**
- * 녹화 데이터에서 convergence/divergence break 및 recovery 자동 추출.
- * velocity 부호 반전 + magnitude threshold로 break 감지.
- */
-function findBreakRecovery(
-    samples: AnalysisSample[],
-    baselinePd: number,
-    avgDistanceCm: number,
-): BreakRecovery {
-    const result: BreakRecovery = {
-        convergenceBreakPd: null,
-        convergenceRecoveryPd: null,
-        divergenceBreakPd: null,
-        divergenceRecoveryPd: null,
-    };
-
-    if (samples.length < 20) return result;
-
-    const mmToD = (mm: number) => mm / (avgDistanceCm * 0.1);
-    const WINDOW = 5;
-    const VELOCITY_BREAK_THRESHOLD = 2; // mm/s — 급반전 감지
-
-    // sliding window velocity 계산
-    const windowedVelocities: number[] = [];
-    for (let i = 0; i < samples.length; i++) {
-        if (i < WINDOW) {
-            windowedVelocities.push(samples[i].velocityMmS);
-        } else {
-            const dt = (samples[i].t - samples[i - WINDOW].t) / 1000;
-            if (dt > 0) {
-                windowedVelocities.push((samples[i].pdMm - samples[i - WINDOW].pdMm) / dt);
-            } else {
-                windowedVelocities.push(0);
-            }
-        }
-    }
-
-    // convergence break: PD가 감소하다가 급반전 (velocity < 0 → velocity > threshold)
-    let maxConvergenceDeviation = 0;
-    let convergenceBreakIdx = -1;
-    // divergence break: PD가 증가하다가 급반전 (velocity > 0 → velocity < -threshold)
-    let maxDivergenceDeviation = 0;
-    let divergenceBreakIdx = -1;
-
-    for (let i = WINDOW + 1; i < windowedVelocities.length; i++) {
-        const prev = windowedVelocities[i - 1];
-        const curr = windowedVelocities[i];
-        const pdDev = samples[i].pdMm - baselinePd;
-
-        // convergence phase → break (PD 감소 → 반전)
-        if (prev < -0.5 && curr > VELOCITY_BREAK_THRESHOLD) {
-            const deviation = Math.abs(pdDev);
-            if (deviation > maxConvergenceDeviation) {
-                maxConvergenceDeviation = deviation;
-                convergenceBreakIdx = i;
-            }
-        }
-
-        // divergence phase → break (PD 증가 → 반전)
-        if (prev > 0.5 && curr < -VELOCITY_BREAK_THRESHOLD) {
-            const deviation = Math.abs(pdDev);
-            if (deviation > maxDivergenceDeviation) {
-                maxDivergenceDeviation = deviation;
-                divergenceBreakIdx = i;
-            }
-        }
-    }
-
-    // convergence break → recovery
-    if (convergenceBreakIdx >= 0) {
-        const breakPdDev = Math.abs(samples[convergenceBreakIdx].pdMm - baselinePd);
-        result.convergenceBreakPd = round1(mmToD(breakPdDev));
-
-        // recovery: break 이후 baseline ± 1mm 이내 안정
-        for (let i = convergenceBreakIdx + 1; i < samples.length; i++) {
-            if (Math.abs(samples[i].pdMm - baselinePd) < 1.0) {
-                const recoveryDev = Math.abs(samples[i].pdMm - baselinePd);
-                result.convergenceRecoveryPd = round1(mmToD(recoveryDev));
-                break;
-            }
-        }
-    }
-
-    // divergence break → recovery
-    if (divergenceBreakIdx >= 0) {
-        const breakPdDev = Math.abs(samples[divergenceBreakIdx].pdMm - baselinePd);
-        result.divergenceBreakPd = round1(mmToD(breakPdDev));
-
-        for (let i = divergenceBreakIdx + 1; i < samples.length; i++) {
-            if (Math.abs(samples[i].pdMm - baselinePd) < 1.0) {
-                const recoveryDev = Math.abs(samples[i].pdMm - baselinePd);
-                result.divergenceRecoveryPd = round1(mmToD(recoveryDev));
-                break;
-            }
-        }
-    }
-
-    // fallback: break 미감지 시 min/max PD 편차 사용
-    if (result.convergenceBreakPd === null) {
-        const minPd = samples.reduce((m, s) => s.pdMm < m ? s.pdMm : m, samples[0].pdMm);
-        const dev = baselinePd - minPd;
-        if (dev > 0.5) {
-            result.convergenceBreakPd = round1(mmToD(dev));
-            result.convergenceRecoveryPd = round1(mmToD(dev * 0.7));
-        }
-    }
-    if (result.divergenceBreakPd === null) {
-        const maxPd = samples.reduce((m, s) => s.pdMm > m ? s.pdMm : m, samples[0].pdMm);
-        const dev = maxPd - baselinePd;
-        if (dev > 0.5) {
-            result.divergenceBreakPd = round1(mmToD(dev));
-            result.divergenceRecoveryPd = round1(mmToD(dev * 0.7));
-        }
-    }
-
-    return result;
-}
-
-// --- 동공 기반 PRA/NRA 추정 ---
-
-function estimateAccommodationFromPupil(samples: AnalysisSample[]): {
-    pra: number | null;
-    nra: number | null;
-} {
-    const proxies = samples.map(s => s.pupilProxy).filter(p => p > 0);
-    if (proxies.length < 10) return { pra: null, nra: null };
-
-    // baseline: 처음 10% 평균
-    const baseCount = Math.max(5, Math.floor(proxies.length * 0.1));
-    const baselineProxy = mean(proxies.slice(0, baseCount));
-    if (baselineProxy <= 0) return { pra: null, nra: null };
-
-    const minProxy = proxies.reduce((m, v) => v < m ? v : m, proxies[0]);
-    const maxProxy = proxies.reduce((m, v) => v > m ? v : m, proxies[0]);
-
-    // 동공-조절 관계: 동공 직경 1mm 변화 ≈ 2-3D 조절 변화
-    // iris proxy 비율로 환산: ΔD ≈ 2.5 × (Δproxy / baselineProxy)
-    const K = 2.5;
-
-    // 최대 수축 → 최대 조절 (PRA, minus lens 상당, 음수)
-    const contractionRatio = (baselineProxy - minProxy) / baselineProxy;
-    const pra = contractionRatio > 0.01 ? -round1(K * contractionRatio) : null;
-
-    // 최대 이완 → 최소 조절 (NRA, plus lens 상당, 양수)
-    const dilationRatio = (maxProxy - baselineProxy) / baselineProxy;
-    const nra = dilationRatio > 0.01 ? round1(K * dilationRatio) : null;
-
-    return { pra, nra };
-}
-
-// --- 메인 계산 함수 ---
-
-/**
- * mm 편차를 프리즘 디옵터(Δ)로 변환
- */
-export const mmToPrismDiopter = (mm: number, viewingDistanceCm: number = 50): number => {
-    return parseFloat((mm / (viewingDistanceCm * 0.1)).toFixed(1));
-};
-
-/**
- * 원거리 IPD에서 주시거리 IPD로 보정
- * 공식: IPD(주시거리) = IPD(원거리) × ((주시거리-12)/(주시거리+13))
- * 원거리 기준: 6m (600cm) 이상
- */
+/** 표적 평면의 길이/거리 계산. 동공 이동에서 회전각을 직접 구하는 식과 구분한다. */
+export const mmToPrismDiopter = (targetPlaneMm: number, viewingDistanceCm = 50): number =>
+  isPositive(viewingDistanceCm) && Number.isFinite(targetPlaneMm)
+    ? round(angleToPrismDiopter(Math.atan(targetPlaneMm / (viewingDistanceCm * 10)) * 180 / Math.PI))
+    : NaN;
+/** 근거리 IPD를 추측하는 구형 함수를 호출해도 원거리 IPD를 변조하지 않는다. */
 export const adjustIPDByDistance = (ipdMm: number, viewingDistanceCm: number): number => {
-    // 원거리 (600cm+)에서는 그대로 반환
-    if (viewingDistanceCm >= 600) {
-        return ipdMm;
-    }
-    // 표준 공식 적용
-    const adjusted = ipdMm * ((viewingDistanceCm - 12) / (viewingDistanceCm + 13));
-    return parseFloat(adjusted.toFixed(1));
+  void viewingDistanceCm;
+  return ipdMm;
 };
 
-/**
- * 분석 샘플 배열로부터 임상 지표를 계산하는 순수 함수
- */
-export const computeClinicalMetrics = (
-    samples: AnalysisSample[],
-    userAge?: number,
-): Partial<ClinicalMetrics> => {
-    if (samples.length < 10) {
-        return {
-            distPhoria: null, distPRC: null, distNRC: null,
-            nearPhoria: null, nearPRC: null, nearNRC: null,
-            nearPRA: null, nearNRA: null,
-            acA: null, npc: null, maxAccom: null,
-        };
-    }
-
-    const avgPixelToMm = mean(samples.map(s => s.pixelToMm));
-    const avgDistanceCm = mean(samples.map(s => s.distanceCm));
-    // 유효 거리 fallback
-    const effectiveDistCm = avgDistanceCm > 10 ? avgDistanceCm : 50;
-    const mmToD = (mm: number) => mm / (effectiveDistCm * 0.1);
-
-    // baseline PD (처음 10% 안정 구간)
-    const baselineCount = Math.min(30, Math.max(5, Math.floor(samples.length * 0.1)));
-    const baselinePd = mean(samples.slice(0, baselineCount).map(s => s.pdMm));
-
-    // --- 사위 (1차: 기존 방식 유지, 2차에서 커버테스트 대체) ---
-    const pdDeviation = mean(samples.map(s => s.pdMm)) - baselinePd;
-    const distPhoria = round1(mmToD(pdDeviation));
-    const nearPhoria = round1(mmToD(pdDeviation * 1.5)); // 2차에서 실측 대체 예정
-
-    // --- PRC / NRC (break point 기반) ---
-    const br = findBreakRecovery(samples, baselinePd, effectiveDistCm);
-    const distPRC = br.convergenceBreakPd !== null
-        ? `${br.convergenceBreakPd}/${br.convergenceRecoveryPd ?? '—'}`
-        : null;
-    const distNRC = br.divergenceBreakPd !== null
-        ? `${br.divergenceBreakPd}/${br.divergenceRecoveryPd ?? '—'}`
-        : null;
-    // 근거리 PRC/NRC: 1차에서는 원거리 기반 비율 유지 (2차에서 실측)
-    const nearPRC = br.convergenceBreakPd !== null
-        ? `${round1(br.convergenceBreakPd * 1.3)}/${round1((br.convergenceRecoveryPd ?? 0) * 1.3)}`
-        : null;
-    const nearNRC = br.divergenceBreakPd !== null
-        ? `${round1(br.divergenceBreakPd * 0.8)}/${round1((br.divergenceRecoveryPd ?? 0) * 0.8)}`
-        : null;
-
-    // --- PRA / NRA (동공 기반 추정) ---
-    const accomEst = estimateAccommodationFromPupil(samples);
-    const nearPRA = accomEst.pra;
-    const nearNRA = accomEst.nra;
-
-    // --- AC/A (Heterophoria method) ---
-    const ipdCm = mean(samples.map(s =>
-        Math.abs(s.leftX - s.rightX) * (s.pixelToMm > 0 ? s.pixelToMm : avgPixelToMm))) / 10;
-    const nearDiopter = 100 / Math.min(effectiveDistCm, 100);
-    const acA = round1(ipdCm + nearDiopter * (nearPhoria - distPhoria));
-
-    // --- NPC ---
-    const ipdMm = ipdCm * 10;
-    const npc = br.convergenceBreakPd !== null
-        ? round1(ipdMm / Math.max(br.convergenceBreakPd, 0.1))
-        : null;
-
-    // --- 최대조절력 ---
-    const maxAccom = userAge !== undefined
-        ? round1(18.5 - 0.3 * userAge) // Hofstetter average
-        : (accomEst.pra !== null ? round1(Math.abs(accomEst.pra) + (accomEst.nra ?? 0)) : null);
-
-    return {
-        distPhoria, distPRC, distNRC,
-        nearPhoria, nearPRC, nearNRC,
-        nearPRA, nearNRA,
-        acA, npc, maxAccom,
-    };
+export function ipdFromPixels(gapPx: number, mmPerPixel: number, corneaDistanceMm = 400): number | null {
+  if (![gapPx, mmPerPixel, corneaDistanceMm].every(isPositive)) return null;
+  const focalPx = corneaDistanceMm / mmPerPixel;
+  const halfAngle = Math.atan(gapPx / 2 / focalPx);
+  return 2 * corneaDistanceMm * Math.tan(halfAngle);
+}
+export function calculateAcA(ipdMm: number, farEsoPositive: number, nearEsoPositive: number, nearDistanceCm = 40): number | null {
+  if (!isPositive(ipdMm) || !isPositive(nearDistanceCm) || ![farEsoPositive, nearEsoPositive].every(Number.isFinite)) return null;
+  return ipdMm / 10 + (nearEsoPositive - farEsoPositive) / (100 / nearDistanceCm);
+}
+const absent = (unit: Measurement['unit'], method: string, reason: string): Measurement =>
+  ({ value: null, unit, status: 'unavailable', method, reason });
+const result = (value: number, unit: Measurement['unit'], method: string, reference?: string): Measurement =>
+  Number.isFinite(value) ? ({ value: round(value), unit, status: 'derived', method, reference })
+    : { ...absent(unit, method, '유효한 보정값을 확인해주세요.'), status: 'invalid' };
+function coverResult(trials: CoverTrial[], axis: 'horizontalDelta' | 'verticalRightRelativeDelta', note?: string, manifestMovement?: boolean): Measurement {
+  if (manifestMovement) return absent('Δ', 'calibrated-alternate-cover', '첫 단순차폐에서 반대 눈의 이동이 관찰되어 사위량 해석을 보류합니다.');
+  const valid = trials.filter(t => t[axis] !== null && Number.isFinite(t[axis]));
+  if (valid.filter(t => t.eye === 'right').length < 5 || valid.filter(t => t.eye === 'left').length < 5) {
+    return absent('Δ', 'calibrated-alternate-cover', note || '시선각도 보정과 각 눈 5회 유효 차폐가 필요합니다.');
+  }
+  return result(valid.reduce((sum, t) => sum + t[axis]!, 0) / valid.length, 'Δ', 'calibrated-alternate-cover',
+    axis === 'horizontalDelta' ? '내사위 + / 외사위 −' : '오른눈 상대 상사위 + / 하사위 −');
+}
+export function computeScreeningMetrics(session: ScreeningSession): ScreeningResults {
+  const scale = session.profile.streamMmPerPixelAt40;
+  const ipd = (baseline: ScreeningSession['far'], isFar: boolean): Measurement => {
+    if (!baseline || !isPositive(scale)) return absent('mm', 'camera-ipd', '40cm 보정과 유효 동공 중심이 필요합니다.');
+    const value = ipdFromPixels(baseline.ipdPx, scale);
+    if (value === null) return absent('mm', 'camera-ipd', '보정값을 확인해주세요.');
+    const fromReference = isFar && session.profile.scaleMode === 'known-ipd';
+    return result(value, 'mm', fromReference ? 'known-ipd-calibrated' : 'photo-calibrated-pupil-centers',
+      fromReference ? '입력한 IPD를 기준으로 보정한 값' : '40cm 각막 평면');
+  };
+  const farIpd = ipd(session.far, true), nearIpd = ipd(session.near, false);
+  const farHorizontal = coverResult(session.farTrials, 'horizontalDelta', session.notes['far-cover'], session.manifestMovement['far-cover']);
+  const farVertical = coverResult(session.farTrials, 'verticalRightRelativeDelta', session.notes['far-cover'], session.manifestMovement['far-cover']);
+  const nearHorizontal = coverResult(session.nearTrials, 'horizontalDelta', session.notes['near-cover'], session.manifestMovement['near-cover']);
+  const nearVertical = coverResult(session.nearTrials, 'verticalRightRelativeDelta', session.notes['near-cover'], session.manifestMovement['near-cover']);
+  const endpointCm = session.npc?.distance.corneaCm;
+  const npc = isPositive(endpointCm)
+    ? result(endpointCm + session.profile.rotationCenterOffsetMm / 10, 'cm', 'objective-eye-deviation', '안구회전점→전면카메라, 13mm 오프셋 가정 포함')
+    : absent('cm', 'objective-eye-deviation', session.notes.npc || '유효한 눈 이탈 시점이 기록되지 않았습니다.');
+  const accommodation = (eye: 'right' | 'left'): Measurement => {
+    const d = session.accommodation[eye]?.distance.corneaCm;
+    if (!isPositive(d)) return absent('D', 'monocular-unreadable-push-up', session.notes[eye === 'right' ? 'right-aa' : 'left-aa'] || '단안 판독불가 지점을 기록해주세요.');
+    const targetDistance = d + session.profile.cameraToScreenMm / 10;
+    if (!isPositive(targetDistance)) return absent('D', 'monocular-unreadable-push-up', '각막–화면 거리 보정값이 유효하지 않습니다.');
+    return result(100 / targetDistance, 'D', 'monocular-unreadable-push-up', `각막정점→고정 크기 시표; 굴절교정 ${session.profile.correction}`);
+  };
+  const inputs = [farIpd.value, farHorizontal.value, nearHorizontal.value];
+  const acaValue = inputs.every(v => v !== null) ? calculateAcA(inputs[0]!, inputs[1]!, inputs[2]!) : null;
+  const farDistanceValid = isPositive(session.profile.farTargetDistanceM) && session.profile.farTargetDistanceM >= 6;
+  const acA = acaValue !== null && farDistanceValid && session.profile.correction === 'distance-corrected'
+    ? result(acaValue, 'Δ/D', 'heterophoria-40cm', 'IPD(cm) + (근거리−원거리 사위)/2.5')
+    : absent('Δ/D', 'heterophoria-40cm', '유효 사위·IPD, 6m 이상 표적, 원거리 굴절교정 조건이 필요합니다.');
+  const results: ScreeningResults = { farIpd, nearIpd, farHorizontal, farVertical, nearHorizontal, nearVertical, npc,
+    rightAccommodation: accommodation('right'), leftAccommodation: accommodation('left'), acA };
+  const stages = { farIpd: 'far-ipd', nearIpd: 'near-ipd', farHorizontal: 'far-cover', farVertical: 'far-cover',
+    nearHorizontal: 'near-cover', nearVertical: 'near-cover', npc: 'npc', rightAccommodation: 'right-aa', leftAccommodation: 'left-aa' } as const;
+  for (const key of Object.keys(stages) as (keyof typeof stages)[]) {
+    const outcome = session.outcomes[stages[key]];
+    if (results[key].value === null && (outcome === 'censored' || outcome === 'invalid')) results[key].status = outcome;
+  }
+  return results;
+}
+/** 검사 단계와 종료 이벤트가 없는 자유 녹화에서 수치를 만들지 않는다. */
+export const computeClinicalMetrics = (samples: AnalysisSample[], userAge?: number): Partial<ClinicalMetrics> => {
+  void samples;
+  void userAge;
+  return {
+  distPhoria: null, nearPhoria: null, distPRC: null, distNRC: null, nearPRC: null, nearNRC: null,
+  nearPRA: null, nearNRA: null, acA: null, npc: null, maxAccom: null,
+  };
 };
