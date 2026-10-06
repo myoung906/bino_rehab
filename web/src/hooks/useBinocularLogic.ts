@@ -163,10 +163,11 @@ export function useBinocularLogic() {
     if (s !== 'setup' && !sessionRef.current.completed.includes(s)) return;
     const next = STAGES[Math.min(STAGES.indexOf(s) + 1, STAGES.length - 1)];
     stageRef.current = next; setStage(next); setProgress(0); setDistance(null);
-    setMessage(next === 'far-ipd' ? '카메라–각막을 40cm로 맞추고 휴대폰 너머 먼 표적을 보세요.'
-      : next === 'near-ipd' || next === 'near-cover' ? '카메라–각막을 40cm로 맞추고 렌즈를 보세요.'
-      : next === 'right-aa' ? '40cm로 돌아와 잠깐 먼 곳을 본 뒤 왼눈을 가리세요. 시표 방향이 보이면 시작하세요.'
-      : next === 'left-aa' ? '40cm로 돌아와 잠깐 먼 곳을 본 뒤 오른눈을 가리세요. 시표 방향이 보이면 시작하세요.'
+    setMessage(next === 'far-ipd' ? '40cm에서 휴대폰 너머 먼 곳을 보세요.'
+      : next === 'far-cover' ? '먼 곳을 보며 시작 버튼을 누르세요.'
+      : next === 'near-ipd' || next === 'near-cover' ? '40cm에서 카메라 렌즈를 보세요.'
+      : next === 'right-aa' ? '40cm로 돌아와 왼눈을 가리세요.'
+      : next === 'left-aa' ? '40cm로 돌아와 오른눈을 가리세요.'
       : next === 'npc' ? '휴대폰을 40cm로 되돌리고 렌즈를 보세요.'
       : '안내를 확인한 뒤 시작해주세요.');
   }, []);
@@ -301,8 +302,7 @@ export function useBinocularLogic() {
       }
       rt.pending = null; rt.phase = 'cover'; rt.expected = OTHER(eye); beep();
       setProgress(rt.coverCount * 10);
-      setMessage(rt.preliminary < 2 ? `${eyeName(rt.expected)}을 가린 뒤 손을 떼세요. 먼저 눈의 움직임을 확인합니다.`
-        : `${eyeName(rt.expected)}을 2초 가린 뒤 손을 떼세요. ${rt.coverCount}/10회`);
+      setMessage(`${eyeName(rt.expected)}을 가리고 삐 소리를 기다리세요.`);
       if (rt.coverCount === 10) finish();
       return;
     }

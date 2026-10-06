@@ -6,9 +6,9 @@ import { extractTrackingFrame, missingFrame } from '@/utils/eyeTracking';
 import type { CaptureScope, TrackingFrame } from '@/utils/measurementTypes';
 
 export type TrackingData = TrackingFrame;
-interface Props { onFrame?: (frame: TrackingFrame) => void; showOverlay?: boolean }
+interface Props { onFrame?: (frame: TrackingFrame) => void; showOverlay?: boolean; compact?: boolean }
 
-export default function VideoAnalyzer({ onFrame, showOverlay = true }: Props) {
+export default function VideoAnalyzer({ onFrame, showOverlay = true, compact = false }: Props) {
   const video = useRef<HTMLVideoElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const source = useRef<HTMLCanvasElement | null>(null);
@@ -146,22 +146,22 @@ export default function VideoAnalyzer({ onFrame, showOverlay = true }: Props) {
   }, [enabled, cameraReady, modelReady, scope, showOverlay]);
 
   return <div className="relative h-full min-h-52 overflow-hidden rounded-2xl border border-slate-700 bg-black">
-    <video ref={video} playsInline muted autoPlay className="absolute inset-0 h-full w-full object-contain" style={{ transform: 'scaleX(-1)' }} />
-    <canvas ref={canvas} className="absolute inset-0 h-full w-full object-contain" />
+    <video ref={video} playsInline muted autoPlay className={`absolute inset-0 h-full w-full object-contain ${compact ? 'object-[center_25%]' : ''}`} style={{ transform: 'scaleX(-1)' }} />
+    <canvas ref={canvas} className={`absolute inset-0 h-full w-full object-contain ${compact ? 'object-[center_25%]' : ''}`} />
     {!enabled ? <div className="absolute inset-0 grid place-content-center gap-3 text-center">
       <p className="text-sm text-slate-300">휴대폰을 눈높이 정면에 놓아주세요.</p>
       <button className="glass-button rounded-xl px-6 py-3" onClick={() => { setError(''); setEnabled(true); }}>전면카메라 켜기</button>
-    </div> : <div className="absolute inset-x-3 bottom-3 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-950/85 p-3 text-xs">
-      <span>{error || (!modelReady || !cameraReady ? '카메라와 눈 추적을 준비하고 있습니다…' : detected ? '청록색 원: 판독한 동공 후보 / 노란색: 판독 대기' : '얼굴을 정면에 맞춰주세요.')}</span>
-      {cameraReady && <select aria-label="카메라 선택" className="max-w-40 rounded bg-slate-800 p-1" value={deviceId || scope?.deviceId || ''}
+    </div> : <div className={`absolute inset-x-3 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-950/85 p-3 text-xs ${compact ? 'top-[max(5rem,calc(env(safe-area-inset-top)+4rem))]' : 'bottom-3'}`}>
+      <span role="status">{error || (!modelReady || !cameraReady ? '카메라 준비 중…' : detected ? '두 눈을 확인하고 있습니다.' : '얼굴을 정면으로 맞추세요.')}</span>
+      {cameraReady && !compact && <select aria-label="카메라 선택" className="max-w-40 rounded bg-slate-800 p-1" value={deviceId || scope?.deviceId || ''}
         onChange={e => { setError(''); setCameraReady(false); setDeviceId(e.target.value); }}>
         {devices.map(d => <option key={d.deviceId} value={d.deviceId}>{d.label || '카메라'}</option>)}
       </select>}
-      <button onClick={() => {
+      <button className="min-h-11 touch-manipulation px-2" onClick={() => {
         if (scope) callback.current?.(missingFrame(scope, performance.now(), false));
         setEnabled(false); setModelReady(false); setHandReady(false); setCameraReady(false); setScope(null); setDetected(false);
       }}>카메라 끄기</button>
-      {modelReady && !handReady && <span className="text-amber-300">손 차폐 추적 준비 중 — 완료 후 차폐검사를 시작하세요.</span>}
+      {modelReady && !handReady && !error && <span className="text-amber-300">손 추적 준비 중…</span>}
     </div>}
   </div>;
 }
