@@ -14,6 +14,8 @@ describe('카메라 중심 첫 화면', () => {
     expect(html).toContain('camera-preview');
     expect(html).toContain('눈과 렌즈 사이를 40cm로 맞추세요.');
     expect(html).toContain('카메라를 켜고 얼굴을 맞춰주세요');
+    expect(html).toContain('aria-label="화면 조명"');
+    expect(html).toContain('aria-label="눈 확대 보기"');
   });
   it('첫 화면에서 각도 입력이나 긴 단계 목록을 요구하지 않는다', () => {
     const html = renderToStaticMarkup(<Home />);

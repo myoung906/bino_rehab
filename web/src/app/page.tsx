@@ -12,7 +12,7 @@ const primary = 'min-h-14 w-full touch-manipulation rounded-2xl bg-cyan-300 px-4
 const secondary = 'min-h-12 touch-manipulation rounded-xl border border-slate-600 px-4 py-2 text-sm';
 const input = 'min-h-12 w-full rounded-xl border border-slate-600 bg-slate-900 px-3 text-base';
 
-function Setup({ logic }: { logic: Logic }) {
+function Setup({ logic, lightingSettling = false }: { logic: Logic; lightingSettling?: boolean }) {
   const p = logic.session.profile;
   const [step, setStep] = useState(0);
   const [linePx, setLinePx] = useState(80);
@@ -23,9 +23,9 @@ function Setup({ logic }: { logic: Logic }) {
   if (step === 0) return <div className="space-y-3">
     <h2 className="text-xl font-semibold">눈과 렌즈 사이를 40cm로 맞추세요.</h2>
     <p className="text-sm text-slate-300">카메라에 두 눈이 보이게 맞춰주세요.</p>
-    <button className={primary} disabled={!logic.frame?.facePresent} onClick={() => {
+    <button className={primary} disabled={!logic.frame?.facePresent || lightingSettling} onClick={() => {
       if (!scaleReady) setStep(1); else if (!displayReady) setStep(3); else logic.advance();
-    }}>{logic.frame?.facePresent ? '검사 시작' : '카메라를 켜고 얼굴을 맞춰주세요'}</button>
+    }}>{lightingSettling ? '조명에 맞추는 중…' : logic.frame?.facePresent ? '검사 시작' : '카메라를 켜고 얼굴을 맞춰주세요'}</button>
     <button className={secondary} onClick={() => setStep(1)}>내 기준 확인</button>
   </div>;
   if (step === 1) return <div className="space-y-3">
@@ -128,17 +128,33 @@ function InspectorSettings({ logic, onClose }: { logic: Logic; onClose: () => vo
 export default function Home() {
   const logic = useBinocularLogic();
   const [settings, setSettings] = useState(false);
+  const [lightOn, setLightOn] = useState(false);
+  const [eyeZoom, setEyeZoom] = useState(true);
+  const [lightingSettling, setLightingSettling] = useState(false);
+  useEffect(() => {
+    if (!lightingSettling) return;
+    const timer = window.setTimeout(() => setLightingSettling(false), 2500);
+    return () => window.clearTimeout(timer);
+  }, [lightingSettling, lightOn]);
   const aa = logic.stage.endsWith('aa');
   const stageNumber = STAGES.indexOf(logic.stage);
-  return <main className="fixed inset-0 isolate h-dvh overflow-hidden bg-black font-sans text-slate-100">
-    <div className="absolute inset-0"><VideoAnalyzer onFrame={logic.processFrame} compact /></div>
+  return <main className={`fixed inset-0 isolate h-dvh overflow-hidden font-sans text-slate-100 ${lightOn ? 'bg-white' : 'bg-black'}`}>
+    <div className={`absolute ${lightOn ? 'inset-[clamp(20px,6vw,32px)]' : 'inset-0'}`}><VideoAnalyzer onFrame={logic.processFrame} compact eyeZoom={eyeZoom && !logic.active} stage={logic.stage} /></div>
+    {lightOn && <div aria-label="얼굴을 비추는 흰 화면 조명" className="pointer-events-none absolute inset-0 border-[clamp(20px,6vw,32px)] border-white" />}
     {aa && !settings && <><LandoltTarget logic={logic} />{logic.active && <button aria-label="안 보이면 화면을 탭" className="absolute inset-0 z-10 touch-manipulation" onClick={logic.tapUnreadable} />}</>}
     <header className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-center justify-between gap-3 bg-gradient-to-b from-black/90 to-transparent px-4 pb-6 pt-[max(0.75rem,env(safe-area-inset-top))]">
       <div><h1 className="text-sm font-semibold text-cyan-300">Bino Rehab v2</h1><p className="text-sm">{logic.stage === 'setup' ? '검사 준비' : `${stageNumber} / 8 · ${STAGE_TITLES[logic.stage]}`}</p></div>
-      <button className={`${secondary} pointer-events-auto bg-slate-950/80`} onClick={() => { if (!settings) logic.backToSetup(); setSettings(v => !v); }}>{settings ? '닫기' : '설정'}</button>
+      <div className="pointer-events-auto flex gap-1">
+        <button aria-pressed={lightOn} aria-label="화면 조명" disabled={logic.stage !== 'setup' || settings || lightingSettling}
+          className="min-h-12 touch-manipulation rounded-xl border border-slate-500 bg-slate-950/90 px-2 text-xs disabled:opacity-50"
+          title="검사 준비 중에 조명을 선택하세요" onClick={() => { setLightOn(v => !v); setLightingSettling(true); }}>조명 {lightOn ? '켬' : '끔'}</button>
+        <button aria-pressed={eyeZoom} aria-label="눈 확대 보기" disabled={logic.active} className="min-h-12 touch-manipulation rounded-xl border border-slate-500 bg-slate-950/90 px-2 text-xs disabled:opacity-50"
+          onClick={() => setEyeZoom(v => !v)}>눈 확대</button>
+        <button className="min-h-12 touch-manipulation rounded-xl border border-slate-500 bg-slate-950/90 px-2 text-xs" onClick={() => { if (!settings) logic.backToSetup(); setSettings(v => !v); }}>{settings ? '닫기' : '설정'}</button>
+      </div>
     </header>
     <section aria-label={settings ? '검사자 설정' : STAGE_TITLES[logic.stage]} className="absolute inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-30 mx-auto max-w-lg rounded-3xl border border-slate-600/60 bg-slate-950/95 p-4 shadow-2xl sm:p-5">
-      {settings ? <InspectorSettings logic={logic} onClose={() => setSettings(false)} /> : logic.stage === 'setup' ? <Setup logic={logic} /> : logic.stage === 'results' ? <Results logic={logic} /> : <MeasurementStep logic={logic} />}
+      {settings ? <InspectorSettings logic={logic} onClose={() => setSettings(false)} /> : logic.stage === 'setup' ? <Setup logic={logic} lightingSettling={lightingSettling} /> : logic.stage === 'results' ? <Results logic={logic} /> : <MeasurementStep logic={logic} />}
     </section>
   </main>;
 }
